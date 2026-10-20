@@ -997,7 +997,7 @@ const ask = (t) => prompt(t)?.trim();
 const user = (id) => S.users.find((u) => u.id === id);
 const pun = async (u, type, reason) => { await addDoc(collection(db, "punishments"), { uid: u.id, gamertag: u.gamertag, type, reason, by: S.me.gamertag, active: true, createdAt: serverTimestamp() }); if (type === "jail" || type === "ban") newsAdd("punish", `${u.gamertag} wurde ${type === "jail" ? "in den Knast gesteckt" : "gebannt"}: ${reason}`).catch(() => {}); };
 const cartChanged = () => { S.bump = true; if (S.view === "shop" && S.shopPage === "browse" && $("#shopDyn")) shopRefresh(); else render(true); };
-async async function submitSale() {
+async function submitSale() {
   if (S.pop) return;
   if (!S.sellItem) throw Error("Bitte zuerst einen Artikel auswählen");
   if (outOfGame()) throw Error("Du bist ausgeschieden");
