@@ -834,7 +834,13 @@ const V = {
         <label for="sc">Kategorie</label><input id="sc" name="category"><label for="sk">Lagerbestand in Stück (leer = unbegrenzt)</label><input id="sk" name="stock" type="number" min="0">
         <label for="smc">Minecraft-ID (z. B. golden_apple)</label><input id="smc" name="minecraftId" placeholder="leer = nur eigene Befehle"><label for="sic">Icon (Emoji)</label><input id="sic" name="icon" placeholder="🧱">
         <label for="scm">Eigene Befehle (eine Zeile je Befehl, {player} wird ersetzt)</label><textarea id="scm" name="commands" placeholder="/give {player} golden_apple 2"></textarea><p><button class="go">Speichern</button></p></form>
-        <div class="card"><div class="row between"><h3 style="margin:0">Artikel verwalten (${fmt(S.shop.length)})</h3><button type="button" class="sm" data-act="exportShop">📥 CSV exportieren</button></div><p class="lbl hint">Exportiert alle aktuell geladenen Shop-Artikel mit ID, Name, Preis, Kategorie, Icon, Minecraft-ID, Befehlen usw.</p><input id="admQ" placeholder="Artikel suchen …" value="${esc(S.admQ)}" style="margin-bottom:.5rem"><div id="admList">${admShopList()}</div></div></div>` : ""}
+        <div class="card">
+  <div class="row between"><div><h3 style="margin:0">Shop-Daten</h3><p class="lbl hint" style="margin:.25rem 0 0">Alle aktuell geladenen Shop-Artikel als CSV sichern – inklusive IDs, Namen, Preisen, Minecraft-IDs, Icons und Befehlen.</p></div><button type="button" class="go" data-act="exportShop">📥 CSV exportieren</button></div>
+</div>
+<div class="card">
+  <div class="row between"><h3 style="margin:0">Artikel verwalten (${fmt(S.shop.length)})</h3></div>
+  <input id="admQ" placeholder="Artikel suchen …" value="${esc(S.admQ)}" style="margin-bottom:.5rem"><div id="admList">${admShopList()}</div>
+</div></div>` : ""}
       ${F("settings") ? `<form class="card" data-form="cfg"><h3>Einstellungen</h3>${cfgFields()}<p><button class="go">Speichern</button></p></form><div class="card warn"><h3>Event zurücksetzen</h3><p class="lbl">Behält Realm-Einstellungen und den gespeicherten Phasenplan. Löscht Event-Fortschritt und Teams.</p><button type="button" class="bad" data-act="resetEvent">Alles zurücksetzen</button></div>` : ""}</div>` : "";
     return `${tabs}${F("players") ? pendingBox() : ""}${adminOnly}<div class="cols">
       ${F("news") ? `<form class="card" data-form="newsPost"><h3>News veröffentlichen</h3><label for="nt">Text</label><input id="nt" name="text" maxlength="200" placeholder="z. B. Heute Abend um 20 Uhr Minigame!" required><p><button class="go">Posten</button></p></form>` : ""}
@@ -950,7 +956,7 @@ const ACT = {
   phaseNow: (b) => setPhase(b.dataset.p, 0, null),
   voteQuick: () => openMinigameVote().then(() => toast("Abstimmung gestartet", "ok")),
   resetEvent: () => resetEvent(),
-  exportShop: () => exportShopCSV(),
+
   teamDel: async (b) => {
     const t = S.teams.find((x) => x.id === b.dataset.id); if (!t || !confirm(`Team „${t.name}“ auflösen? Das Team-Guthaben (${fmt(t.vault)}) wird unter den Mitgliedern aufgeteilt.`)) return;
     const share = Math.floor((t.vault || 0) / Math.max(1, t.members.length));
