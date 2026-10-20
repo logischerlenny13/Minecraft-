@@ -510,6 +510,7 @@ const H = {
     return runTransaction(db, async (t) => {
       const [us, ts] = [await t.get(U(r.uid)), await t.get(U(tg))];
       if (!ts.exists()) throw Error("Ziel unbekannt");
+      if (ts.data().role !== "player") throw Error("Auf Admins und Moderatoren kann kein Kopfgeld ausgesetzt werden");
       if (us.data().teamId && us.data().teamId === ts.data().teamId) throw Error("Kein Kopfgeld auf dein Teammitglied");
       const b = us.data().balance; if (b < a) throw Error("Nicht genug Coins");
       t.update(U(r.uid), { balance: b - a }); addTx(t, r.uid, -a, `Kopfgeld auf ${ts.data().gamertag}`, "bounty", b - a);
@@ -563,11 +564,12 @@ const H = {
   },
   async kill(r) {
     if (!["mod", "admin"].includes(r.role)) throw Error("Keine Berechtigung");
-    const { victim, killer, bountyAmount } = r.payload, cf = C(), endgame = S.state?.phase === "end";
+    const { victim, killer } = r.payload, cf = C(), endgame = S.state?.phase === "end";
+    const bountyAmount = killer && !endgame && r.payload.addBounty !== false ? Math.max(0, Math.floor(Number(r.payload.bountyAmount ?? cf.bountyOnKill) || Number(cf.bountyOnKill) || 0)) : 0;
     const bs = killer ? (await getDocs(query(collection(db, "bounties"), where("target", "==", victim), where("active", "==", true)))).docs : [];
     return runTransaction(db, async (t) => {
       const vs = await t.get(U(victim)), ks = killer ? await t.get(U(killer)) : null;
-      if (endgame) { if (vs.data().role !== "player" || !vs.data().teamId) throw Error("Dieser Nutzer nimmt nicht an der Endphase teil"); if (vs.data().eliminated) throw Error("Spieler ist bereits ausgeschieden"); if (killer && (ks.data().role !== "player" || !ks.data().teamId || ks.data().eliminated)) throw Error("Killer nimmt nicht aktiv an der Endphase teil"); }
+      if (endgame) { if (vs.data().role !== "player" || !vs.data().teamId) throw Error("Dieser Nutzer nimmt nicht an der Endphase teil"); if (vs.data().eliminated) throw Error("Spieler ist bereits ausgeschieden"); if (killer && ks.data().role === "player" && (!ks.data().teamId || ks.data().eliminated)) throw Error("Killer nimmt nicht aktiv an der Endphase teil"); }
       const live = []; for (const b of bs) { const s = await t.get(b.ref); if (s.exists() && s.data().active) live.push(s); }
       const total = live.reduce((x, s) => x + s.data().amount, 0);
       const newLives = endgame ? Math.max(0, (vs.data().lives ?? 3) - 1) : null;
@@ -734,7 +736,7 @@ const V = {
   },
   bounty() {
     if (S.state?.phase === "end") { const sum = {}; S.bounties.forEach((b) => (sum[b.targetName] = (sum[b.targetName] ?? 0) + b.amount)); const top = Object.entries(sum).sort((a,b)=>b[1]-a[1]); return `<div class="card"><h3>🔒 Kopfgeld eingefroren</h3><p class="lbl">In der Endphase können keine neuen Kopfgelder ausgesetzt werden. Bestehende Kopfgelder bleiben aktiv.</p>${top.length ? `<table><tbody>${top.map(([n,a])=>`<tr><td>${esc(n)}</td><td class="pos">${fmt(a)} Coins</td></tr>`).join("")}</tbody></table>` : `<p class="empty">Niemand ist ausgeschrieben.</p>`}</div>`; }
-    const targets = active().filter((u) => u.id !== S.uid && (!S.me.teamId || u.teamId !== S.me.teamId)), sum = {};
+    const targets = active().filter((u) => u.role === "player" && u.id !== S.uid && (!S.me.teamId || u.teamId !== S.me.teamId)), sum = {};
     S.bounties.forEach((b) => (sum[b.targetName] = (sum[b.targetName] ?? 0) + b.amount));
     const top = Object.entries(sum).sort((a, b) => b[1] - a[1]);
     return `<div class="cols"><form class="card" data-form="bounty"><h3>Kopfgeld aussetzen</h3><label for="bt">Ziel</label><select id="bt" name="target" required>${targets.map((u) => `<option value="${u.id}">${esc(u.gamertag)}</option>`).join("")}</select>
@@ -841,6 +843,7 @@ function render(force) {
   if (!S.uid) { lastKey = ""; return loginView(); }
   if (!S.me) return ($("#root").innerHTML = `<div class="login card"><h1><img src="${GRASS}" alt="">RealmOS</h1><p>Konto wird geladen …</p></div>`);
   if (S.me.status !== "active") return ($("#root").innerHTML = `<div class="login card"><h1><img src="${GRASS}" alt="">RealmOS</h1><p>${S.me.status === "rejected" ? "Anmeldung abgelehnt." : `Hallo <b>${esc(S.me.gamertag)}</b>! Warte auf Freischaltung.`}</p><button data-act="logout">Abmelden</button></div>`);
+  if (S.me.role === "player" && S.me.eliminated === true) return ($("#root").innerHTML = `<div class="login card"><h1>☠️ Du bist ausgeschieden</h1><p>Deine Teilnahme an diesem Event ist beendet.</p></div>`);
   if (!V[S.view] || (S.view === "admin" && !isStaff())) S.view = "home";
   const dock = [["home", "⌂", "Home"], ["wallet", "💳", "Konto"], ["shop", "🧱", "Shop"], ["news", "📰", "News"], ["support", "🛟", "Support"], ...(isStaff() ? [["admin", "🛡️", "Admin"]] : []), ["settings", "⚙️", "Einstellungen"]];
   const inApp = S.view !== "home", cart = S.view === "shop" && S.shopPage === "cart";
@@ -950,7 +953,7 @@ const FORM = {
   async supportCall(f) { await addDoc(collection(db, "support_tickets"), { uid: S.uid, gamertag: S.me.gamertag, reason: f.reason.value, text: f.text.value.trim(), type: "call", status: "open", createdAt: serverTimestamp() }); toast("Supporter wurde gerufen", "ok"); },
   async newsPost(f) { if (!isStaff()) throw Error("Keine Berechtigung"); await newsAdd("info", f.text.value, S.me.gamertag); toast("News veröffentlicht", "ok"); },
   async cartCheckout(f) { if (outOfGame()) throw Error("Du bist ausgeschieden und kannst nicht mehr bestellen"); const items = Object.entries(S.cart).filter(([, qty]) => qty > 0).map(([itemId, qty]) => ({ itemId, qty })); if (!items.length) throw Error("Warenkorb ist leer"); if (f.delivery.value === "chest") xyz(f.coords.value); const ref = await addDoc(collection(db, "requests"), { type: "cart", payload: { items, delivery: f.delivery.value, coords: f.coords.value.trim() }, uid: S.uid, status: "pending", createdAt: serverTimestamp() }); const p = (S.pop = { title: "Bestellung", start: Date.now(), duration: 30, phase: "wait", msg: "", un: [] }); p.un.push(onSnapshot(ref, (d) => { const s = d.data(); if (S.pop !== p || !s) return; if (s.status === "error") { p.phase = "error"; p.msg = s.result || "Bestellung fehlgeschlagen"; renderModal(); } if (s.status === "done") { S.cart = {}; p.msg = s.result || "Bestellung angenommen"; if (s.orderId && !p.watch) { p.watch = true; p.un.push(onSnapshot(doc(db, "orders", s.orderId), (o) => { if (S.pop === p && o.data()?.status === "done") { p.phase = "done"; renderModal(); } })); } renderModal(); } })); renderModal(); },
-  death: (f) => { S.victim = ""; return req("kill", { victim: f.victim.value, killer: f.killer.value || null, bountyAmount: f.killer.value && f.bo.checked ? Math.max(0, Math.floor(+f.ba.value || 0)) : 0 }); },
+  death: (f) => { S.victim = ""; return req("kill", { victim: f.victim.value, killer: f.killer.value || null, addBounty: !!(f.killer.value && f.bo.checked), bountyAmount: Math.max(0, Math.floor(+f.ba.value || +C().bountyOnKill || 0)) }); },
   broadcast: (f) => order("Broadcast", [...(f.sub.value.trim() ? [`/title @a subtitle ${clean(f.sub.value)}`] : []), `/title @a title ${clean(f.title.value)}`]),
   clear: (f) => order(`Item entfernen: ${uname(f.uid.value)}`, [`/clear ${q(uname(f.uid.value))} ${f.item.value.trim()}`]),
   coins: async (f) => { await adjust(f.uid.value, Math.floor(+f.amount.value), clean(f.reason.value)); toast("Gebucht", "ok"); },
