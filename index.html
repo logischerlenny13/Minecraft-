@@ -171,6 +171,18 @@ code{flex:1;background:rgba(0,0,0,.45);color:#9ff0a0;padding:.35rem .6rem;border
 /* Animationen beim Seitenwechsel (nur direkt nach Navigation) */
 @keyframes rise{from{opacity:0;transform:translateY(16px) scale(.98)}to{opacity:1;transform:none}}
 @keyframes dockin{from{opacity:0;transform:translate(-50%,30px)}to{opacity:1;transform:translate(-50%,0)}}
+.order.sell{border-left-color:var(--green)}
+.order.fresh{animation:slidein .55s var(--ease) both}
+@keyframes slidein{from{opacity:0;transform:translateX(-24px) scale(.97)}}
+@keyframes shake{20%,60%{transform:translateX(-7px)}40%,80%{transform:translateX(7px)}}
+.bad-x{animation:pop .35s var(--ease),shake .5s .15s}
+.sheet .check{animation:pop .4s var(--ease)}
+.confetti{position:fixed;top:42%;left:50%;font-size:1.4rem;pointer-events:none;z-index:95;animation:burst 1.1s ease-out forwards}
+@keyframes burst{to{transform:translate(var(--x),var(--y)) rotate(var(--r));opacity:0}}
+.badge{animation:badgepop 1.8s ease-in-out infinite}
+@keyframes badgepop{50%{transform:scale(1.18)}}
+.floating-cart{animation:dockin .5s var(--ease) both}
+.ring{transition:background .4s linear}
 .enter .hello,.enter .apphead,.enter .cats,.enter .shophead,.enter .card,.enter .tile,.enter .product,.enter .news-item,.enter .seg,.enter .tabs{animation:rise .6s var(--ease) both;animation-delay:calc(var(--i,0)*45ms)}
 .enter .card:nth-child(2){--i:2}.enter .card:nth-child(3){--i:4}.enter .card:nth-child(4){--i:6}
 .enter .dock{animation:dockin .6s .1s var(--ease) both}
@@ -199,7 +211,7 @@ const GRASS = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAGAAAABgCAYAAADimHc
 /* ================= State & Helfer ================= */
 const CFG0 = { jail: "0 200 0", spawn: "0 100 0", minigame: "0 100 0", startCoins: 100, killReward: 25, bountyOnKill: 50 };
 const S = { fullTab: "", adminMode: "quick", eventPlan: [], walTab: "me", sendFrom: "me", openUser: "", q: "", admQ: "", shopQ: "", shopCat: "Alle", shopLimit: 60, cart: {}, shopPage: "browse", sellQ: "", sellCat: "Alle", sellLimit: 60, sellQty: 1, sellItem: "", bump: false, pop: null, teamTx: [], uid: null, me: null, view: "home", mode: "login", authMsg: "", victim: "", users: [], tx: [], teams: [], shop: [], pun: [], bounties: [], myOrders: [], orders: [], reports: [], support: [], mySupport: [], news: [], state: null, vote: null, ballots: [], cfg: {} };
-let teamSeen, teamUn, unsubs = [], started = false, dirty = false, firstOrders = true, busy = false, catalogSeedStarted = false, lastKey = "", enterTimer;
+let teamSeen, teamUn, unsubs = [], started = false, dirty = false, firstOrders = true, busy = false, catalogSeedStarted = false, lastKey = "", enterTimer, listenRank;
 const C = () => ({ ...CFG0, ...S.cfg });
 
 /* ================= Minecraft-Katalog (alle Items, Preise am bestehenden Sortiment ausgerichtet) ================= */
@@ -429,7 +441,9 @@ onAuthStateChanged(auth, (u) => {
   meUnsub = onSnapshot(doc(db, "users", u.uid), (d) => {
     S.me = d.exists() ? { id: d.id, ...d.data() } : null;
     if ((S.me?.teamId ?? null) !== teamSeen) { teamSeen = S.me?.teamId ?? null; listenTeamTx(); }
-    if (S.me?.status === "active" && !started) { started = true; S.view = "home"; listen(); }
+    let relisten = false;
+    if (started && S.me && rank() !== listenRank) { unsubs.forEach((f) => f()); unsubs = []; started = false; relisten = true; }
+    if (S.me?.status === "active" && !started) { started = true; listenRank = rank(); if (!relisten) S.view = "home"; listen(); }
     render(true);
   });
 });
@@ -455,15 +469,15 @@ function listen() {
     on(doc(db, "settings", "config"), (d) => (S.cfg = d.data() ?? {}));
     on(query(col("reports"), orderBy("createdAt", "desc"), limit(40)), (s) => (S.reports = list(s)));
     on(query(col("support_tickets"), orderBy("createdAt", "desc"), limit(60)), (s) => (S.support = list(s)));
-    on(query(col("orders"), orderBy("createdAt", "desc"), limit(80)), (s) => {
+    on(col("orders"), (s) => {
       const before = S.orders.filter((o) => o.status === "open").length;
-      S.orders = list(s);
+      S.orders = list(s).sort((a,b) => (b.createdAt?.seconds ?? 0) - (a.createdAt?.seconds ?? 0));
       const now = S.orders.filter((o) => o.status === "open").length;
       if (!firstOrders && now > before) beep();
       firstOrders = false;
     });
   }
-  if (isStaff()) on(query(col("requests"), where("status", "==", "pending")), (s) => { for (const d of s.docs) if (!queue.some((x) => x.id === d.id)) queue.push(d); drain(); });
+  if (isStaff()) on(query(col("requests"), where("status", "in", ["pending", "processing"])), (s) => { reqDocs = s.docs; pushReq(); });
 }
 
 /* ================= Anfragen der Spieler → Verarbeitung im Admin-Browser ================= */
@@ -488,7 +502,8 @@ const H = {
     const g = r.gamertag, id = String(d.minecraftId).replace(/^minecraft:/, "");
     const check = "/execute if entity @a[name=" + q(g) + ",hasitem={item=" + id + ",quantity=" + blocks + "..}] run clear @a[name=" + q(g) + "] " + id + " 0 " + blocks;
     const clear = "/clear " + q(g) + " " + id + " 0 " + blocks;
-    const oref = doc(collection(db, "orders"));
+    const oref = doc(db, "orders", r.id);
+    if ((await getDoc(oref)).exists()) return { msg: "Verkaufsauftrag bereits erstellt", orderId: oref.id };
     await setDoc(oref, { kind: "sell", title: "Verkauf: " + qty + "× " + d.name, gamertag: g, uid: r.uid, itemId, itemName: d.name, minecraftId: id, packSize: pack, qty, blocks, unitSalePrice: price, total: price * qty, commands: [check, clear], note: "Prüfung: " + blocks + " Stück vorhanden. Der Prüf-Befehl entfernt die Ware nur bei ausreichender Menge.", status: "open", createdAt: serverTimestamp() });
     return { msg: "Verkaufsauftrag für " + fmt(price * qty) + " Coins erstellt", orderId: oref.id };
   },
@@ -541,9 +556,10 @@ const H = {
     const me0 = (await getDoc(U(r.uid))).data(); if (S.state?.phase === "end" && r.role === "player" && me0?.eliminated) throw Error("Du bist ausgeschieden und kannst nicht mehr bestellen");
     const rows = (r.payload.items || []).map((x) => ({ itemId: String(x.itemId), qty: Math.max(1, Math.min(99, Math.floor(+x.qty || 1))) })).slice(0, 40);
     if (!rows.length) throw Error("Warenkorb ist leer");
-    const oref = doc(collection(db, "orders"));
+    const oref = doc(db, "orders", r.id);
     const msg = await runTransaction(db, async (t) => {
       const us = await t.get(U(r.uid));
+      if ((await t.get(oref)).exists()) return "Bestellung bereits angelegt";
       const refs = rows.map((x) => doc(db, "shop_items", x.itemId));
       const snaps = []; for (const ref of refs) snaps.push(await t.get(ref));
       let total = 0; const bought = [];
@@ -606,6 +622,9 @@ const H = {
   },
 };
 const queue = [];
+let reqDocs = [];
+function pushReq() { for (const d of reqDocs) if (!queue.some((x) => x.id === d.id)) queue.push(d); drain().catch((e) => console.warn("Anfrage-Verarbeitung:", e)); }
+setInterval(() => { if (isStaff() && reqDocs.length) pushReq(); }, 8000);
 async function completeSale(orderId) {
   if (!isStaff()) throw Error("Nur Admin/Support darf Verkäufe bestätigen");
   await runTransaction(db, async (t) => {
@@ -623,17 +642,29 @@ async function completeSale(orderId) {
   });
   toast("Verkauf bestätigt und Coins gutgeschrieben", "ok");
 }
-async function drain() {
+
+async function rejectSale(orderId) {
+  if (!isStaff()) throw Error("Nur Admin/Support darf Verkäufe ablehnen");
+  await runTransaction(db, async (t) => {
+    const oref = doc(db, "orders", orderId), os = await t.get(oref);
+    if (!os.exists()) throw Error("Auftrag nicht gefunden");
+    const o = os.data();
+    if (o.kind !== "sell") throw Error("Kein Verkaufsauftrag");
+    if (o.status !== "open") throw Error("Dieser Verkauf wurde schon bearbeitet");
+    t.update(oref, { status: "rejected", doneAt: serverTimestamp(), doneBy: S.me.gamertag });
+  });
+  toast("Verkauf abgelehnt – keine Coins ausgezahlt", "ok");
+}async function drain() {
   if (busy) return; busy = true;
   while (queue.length) {
     const d = queue.shift(), ref = d.ref;
     try {
-      await runTransaction(db, async (t) => { const s = await t.get(ref); if (s.data().status !== "pending") throw Error("skip"); t.update(ref, { status: "processing" }); });
+      await runTransaction(db, async (t) => { const s = await t.get(ref); if (!s.exists()) throw Error("skip"); const x = s.data(); const proc = x.procAt?.toMillis ? x.procAt.toMillis() : Number(x.procAt || 0); const stale = x.status === "processing" && ["sell", "cart", "buy"].includes(x.type) && Date.now() - proc > 30000; if (x.status !== "pending" && !stale) throw Error("skip"); t.update(ref, { status: "processing", procAt: serverTimestamp() }); });
     } catch { continue; }
     try {
       const r = d.data(), ru = (await getDoc(U(r.uid))).data();
       if (!ru || ru.status !== "active" || !H[r.type]) throw Error("Ungültige Anfrage");
-      const res = await H[r.type]({ ...r, role: ru.role, gamertag: ru.gamertag });
+      const res = await H[r.type]({ ...r, id: d.id, requestId: d.id, role: ru.role, gamertag: ru.gamertag });
       await updateDoc(ref, { status: "done", result: res.msg ?? res, orderId: res.orderId ?? null });
     } catch (e) { await updateDoc(ref, { status: "error", result: e.message }).catch(() => {}); }
   }
@@ -705,12 +736,15 @@ async function resetEvent() {
 /* ================= Views ================= */
 const userOpts = (sel = "", skipMe = false) => (S.state?.phase === "end" ? participants().filter((u) => !u.eliminated) : active()).filter((u) => !(skipMe && u.id === S.uid)).map((u) => `<option value="${u.id}" ${u.id === sel ? "selected" : ""}>${esc(u.gamertag)}</option>`).join("");
 
+const seenOrders = new Set();
 function orderCard(o) {
-  return `<div class="order"><div class="oh"><b>${esc(o.title)}</b><span class="lbl">${esc(o.gamertag ?? "")} · ${date(o.createdAt)}</span></div>${o.note ? `<div class="lbl">${esc(o.note)}</div>` : ""}
+  const fresh = !seenOrders.has(o.id); seenOrders.add(o.id);
+  const sell = o.kind === "sell";
+  return `<div class="order ${sell ? "sell" : ""} ${fresh ? "fresh" : ""}"><div class="oh"><b>${esc(o.title)}</b><span class="lbl">${esc(o.gamertag ?? "")} · ${date(o.createdAt)}</span></div>${o.note ? `<div class="lbl">${esc(o.note)}</div>` : ""}
+    ${sell ? `<div class="lbl">Auszahlung bei Annahme: <b class="gold">${fmt(o.total)} 🪙</b></div>` : ""}
     ${(o.commands ?? []).map((c) => `<div class="cmd"><code>${esc(c)}</code><button class="sm" data-act="copy" data-t="${esc(c)}">Kopieren</button></div>`).join("")}
-    <div class="row"><button class="sm" data-act="copyAll" data-id="${o.id}">Alle kopieren</button>${o.kind === "sell" ? `<button class="go sm" data-act="done" data-id="${o.id}">✓ Prüfung erfolgreich</button>` : `<button class="go sm" data-act="done" data-id="${o.id}">Fertig</button>`}</div></div>`;
-}
-const pendingBox = () => { const p = S.users.filter((u) => u.status === "pending"); return isAdmin() && p.length ? `<div class="card warn"><h3>Neue Anmeldungen (${p.length})</h3>${p.map((u) => `<div class="row" style="margin:.3rem 0"><b>${esc(u.gamertag)}</b><button class="sm go" data-act="approve" data-id="${u.id}">Freischalten</button><button class="sm bad" data-act="reject" data-id="${u.id}">Ablehnen</button></div>`).join("")}</div>` : ""; };
+    <div class="row"><button class="sm" data-act="copyAll" data-id="${o.id}">Alle kopieren</button>${sell ? `<button class="go sm" data-act="done" data-id="${o.id}">✓ Annehmen</button><button class="bad sm" data-act="orderReject" data-id="${o.id}">✕ Ablehnen</button>` : `<button class="go sm" data-act="done" data-id="${o.id}">Fertig</button>`}</div></div>`;
+}const pendingBox = () => { const p = S.users.filter((u) => u.status === "pending"); return isAdmin() && p.length ? `<div class="card warn"><h3>Neue Anmeldungen (${p.length})</h3>${p.map((u) => `<div class="row" style="margin:.3rem 0"><b>${esc(u.gamertag)}</b><button class="sm go" data-act="approve" data-id="${u.id}">Freischalten</button><button class="sm bad" data-act="reject" data-id="${u.id}">Ablehnen</button></div>`).join("")}</div>` : ""; };
 const newsList = (items, del = false) => items.map((n, i) => `<div class="news-item" style="--i:${i + 2}"><span class="nic">${NI[n.type] || "📣"}</span><div><div>${esc(n.text)}</div><small>${ago(n.createdAt)}${n.by ? " · " + esc(n.by) : ""}</small></div>${del && isStaff() ? `<button class="sm" data-act="newsDel" data-id="${n.id}" aria-label="Löschen">✕</button>` : "<span></span>"}</div>`).join("");
 
 function shopFiltered() {
@@ -954,17 +988,12 @@ const user = (id) => S.users.find((u) => u.id === id);
 const pun = async (u, type, reason) => { await addDoc(collection(db, "punishments"), { uid: u.id, gamertag: u.gamertag, type, reason, by: S.me.gamertag, active: true, createdAt: serverTimestamp() }); if (type === "jail" || type === "ban") newsAdd("punish", `${u.gamertag} wurde ${type === "jail" ? "in den Knast gesteckt" : "gebannt"}: ${reason}`).catch(() => {}); };
 const cartChanged = () => { S.bump = true; if (S.view === "shop" && S.shopPage === "browse" && $("#shopDyn")) shopRefresh(); else render(true); };
 async function submitSale() {
+  if (S.pop) return;
   if (!S.sellItem) throw Error("Bitte zuerst einen Artikel auswählen");
   if (outOfGame()) throw Error("Du bist ausgeschieden");
   const qty = Math.max(1, Math.min(99, Math.floor(+S.sellQty || 1)));
   const ref = await addDoc(collection(db, "requests"), { type: "sell", payload: { itemId: S.sellItem, qty }, uid: S.uid, status: "pending", createdAt: serverTimestamp() });
-  const p = (S.pop = { title: "Verkauf wird geprüft", start: Date.now(), duration: 60, phase: "wait", msg: "", un: [] });
-  p.un.push(onSnapshot(ref, (d) => {
-    const s = d.data(); if (S.pop !== p || !s) return;
-    if (s.status === "error") { p.phase = "error"; p.msg = s.result || "Verkauf fehlgeschlagen"; renderModal(); }
-    if (s.status === "done") { p.phase = "done"; p.msg = s.result || "Verkauf abgeschlossen"; renderModal(); S.sellItem = ""; S.sellQty = 1; }
-  }));
-  renderModal();
+  trackOrder(ref, "Verkauf", "sell", () => { S.sellItem = ""; S.sellQty = 1; });
 }
 const ACT = {
   nav: (b) => { S.view = b.dataset.v; if (S.view === "shop") S.shopPage = "browse"; render(true); },
@@ -981,7 +1010,8 @@ const ACT = {
   adminMode: (b) => { S.adminMode = b.dataset.m; render(true); },
   copy: (b) => copy(b.dataset.t),
   copyAll: (b) => copy((S.orders.find((o) => o.id === b.dataset.id)?.commands ?? []).join("\n")),
-  done: async (b) => { const o = S.orders.find((x) => x.id === b.dataset.id); if (o?.kind === "sell") await completeSale(o.id); else await updateDoc(doc(db, "orders", b.dataset.id), { status: "done", doneAt: serverTimestamp(), doneBy: S.me.gamertag }); },
+  done: async (b) => { b.disabled = true; try { const o = S.orders.find((x) => x.id === b.dataset.id); if (o?.kind === "sell") await completeSale(o.id); else await updateDoc(doc(db, "orders", b.dataset.id), { status: "done", doneAt: serverTimestamp(), doneBy: S.me.gamertag }); } catch (e) { b.disabled = false; throw e; } },
+  orderReject: async (b) => { b.disabled = true; try { await rejectSale(b.dataset.id); } catch (e) { b.disabled = false; throw e; } },
   approve: (b) => approve(b.dataset.id).then(() => toast("Freigeschaltet", "ok")),
   reject: (b) => updateDoc(U(b.dataset.id), { status: "rejected" }),
   shopCat: (b) => { S.shopCat = b.dataset.cat; S.shopLimit = 60; render(true); },
@@ -1048,17 +1078,14 @@ const FORM = {
   async report(f) { await addDoc(collection(db, "reports"), { uid: S.uid, reporterName: S.me.gamertag, target: f.target.value, targetName: uname(f.target.value), reason: f.reason.value, text: f.text.value.trim(), status: "open", createdAt: serverTimestamp() }); toast("Meldung gesendet", "ok"); },
   async supportCall(f) { await addDoc(collection(db, "support_tickets"), { uid: S.uid, gamertag: S.me.gamertag, reason: f.reason.value, text: f.text.value.trim(), type: "call", status: "open", createdAt: serverTimestamp() }); toast("Supporter wurde gerufen", "ok"); },
   async newsPost(f) { if (!isStaff()) throw Error("Keine Berechtigung"); await newsAdd("info", f.text.value, S.me.gamertag); toast("News veröffentlicht", "ok"); },
-  async cartCheckout(f) { if (outOfGame()) throw Error("Du bist ausgeschieden und kannst nicht mehr bestellen"); const items = Object.entries(S.cart).filter(([, qty]) => qty > 0).map(([itemId, qty]) => ({ itemId, qty })); if (!items.length) throw Error("Warenkorb ist leer"); if (f.delivery.value === "chest") xyz(f.coords.value); const ref = await addDoc(collection(db, "requests"), { type: "cart", payload: { items, delivery: f.delivery.value, coords: f.coords.value.trim() }, uid: S.uid, status: "pending", createdAt: serverTimestamp() }); const p = (S.pop = { title: "Bestellung", start: Date.now(), duration: 30, phase: "wait", msg: "", un: [] }); p.un.push(onSnapshot(ref, (d) => { const s = d.data(); if (S.pop !== p || !s) return; if (s.status === "error") { p.phase = "error"; p.msg = s.result || "Bestellung fehlgeschlagen"; renderModal(); } if (s.status === "done") { S.cart = {}; p.msg = s.result || "Bestellung angenommen"; if (s.orderId && !p.watch) { p.watch = true; p.un.push(onSnapshot(doc(db, "orders", s.orderId), (o) => { if (S.pop === p && o.data()?.status === "done") { p.phase = "done"; renderModal(); } })); } renderModal(); } })); renderModal(); },
-  death: (f) => { S.victim = ""; return req("kill", { victim: f.victim.value, killer: f.killer.value || null, addBounty: !!(f.killer.value && f.bo.checked), bountyAmount: Math.max(0, Math.floor(+f.ba.value || +C().bountyOnKill || 0)) }); },
-  broadcast: (f) => order("Broadcast", [...(f.sub.value.trim() ? [`/title @a subtitle ${clean(f.sub.value)}`] : []), `/title @a title ${clean(f.title.value)}`]),
-  clear: (f) => order(`Item entfernen: ${uname(f.uid.value)}`, [`/clear ${q(uname(f.uid.value))} ${f.item.value.trim()}`]),
-  coins: async (f) => { await adjust(f.uid.value, Math.floor(+f.amount.value), clean(f.reason.value)); toast("Gebucht", "ok"); },
-  phase: (f) => setPhase(f.phase.value, Math.max(0, +f.min.value || 0), f.next.value),
-  async voteStart(f) { const options = Object.fromEntries(f.opts.value.split(",").map((s) => s.trim()).filter(Boolean).map((l) => [slug(l), l])); await setDoc(doc(db, "events", "vote"), { open: true, round: (S.vote?.round ?? 0) + 1, options }); newsAdd("info", `Abstimmung gestartet: ${Object.values(options).join(" · ")}`).catch(() => {}); toast("Abstimmung gestartet", "ok"); },
-  async team(f) {
-    if (f.a.value === f.b.value) throw Error("Zwei verschiedene Spieler wählen");
-    const ref = await addDoc(collection(db, "teams"), { name: f.name.value.trim(), members: [f.a.value, f.b.value], vault: 0 });
-    await updateDoc(U(f.a.value), { teamId: ref.id }); await updateDoc(U(f.b.value), { teamId: ref.id }); toast("Team erstellt", "ok");
+  async cartCheckout(f) {
+    if (S.pop) return;
+    if (outOfGame()) throw Error("Du bist ausgeschieden und kannst nicht mehr bestellen");
+    const items = Object.entries(S.cart).filter(([, qty]) => qty > 0).map(([itemId, qty]) => ({ itemId, qty }));
+    if (!items.length) throw Error("Warenkorb ist leer");
+    if (f.delivery.value === "chest") xyz(f.coords.value);
+    const ref = await addDoc(collection(db, "requests"), { type: "cart", payload: { items, delivery: f.delivery.value, coords: f.coords.value.trim() }, uid: S.uid, status: "pending", createdAt: serverTimestamp() });
+    trackOrder(ref, "Bestellung", "shop", () => { S.cart = {}; });
   },
   async shopItem(f) { await setDoc(doc(db, "shop_items", slug(f.name.value)), { name: f.name.value.trim(), price: +f.price.value, category: f.category.value.trim() || "Sonstiges", stock: f.stock.value === "" ? null : Math.max(0, Math.floor(+f.stock.value)), packSize: Math.max(1, Math.floor(+(f.packSize?.value || 1))), minecraftId: (f.minecraftId?.value || "").trim(), icon: (f.icon?.value || "🧱").trim(), commands: f.commands.value.split("\n").map((s) => s.trim()).filter(Boolean), active: true }); toast("Artikel gespeichert", "ok"); },
   async cfg(f) { await setDoc(doc(db, "settings", "config"), { ...S.cfg, jail: xyz(f.jail.value), spawn: xyz(f.spawn.value), minigame: xyz(f.minigame.value), startCoins: +f.startCoins.value, killReward: +f.killReward.value, bountyOnKill: +f.bountyOnKill.value }); toast("Gespeichert", "ok"); },
@@ -1087,16 +1114,53 @@ function playerList() {
 
 /* ===== Bestell-Popup ===== */
 function closePop() { S.pop?.un.forEach((f) => f()); S.pop = null; renderModal(); }
-function renderModal() {
-  const m = $("#modal"), p = S.pop; if (!p) { m.innerHTML = ""; return; }
-  const left = Math.max(0, (p.duration ?? 30) - Math.floor((Date.now() - p.start) / 1000));
-  let body;
-  if (p.phase === "done") body = `<svg class="check" viewBox="0 0 52 52"><circle cx="26" cy="26" r="24"/><path d="M14 27l8 8 16-17"/></svg><h2>Auftrag ausgeführt</h2><p class="lbl">${esc(p.title)} wurde geliefert. Viel Spaß!</p><button class="go" data-act="popClose">Super</button>`;
-  else if (p.phase === "error") body = `<div class="bad-x">✕</div><h2>Kauf fehlgeschlagen</h2><p class="lbl">${esc(p.msg)}</p><button data-act="popClose">Schließen</button>`;
-  else body = `<div class="ring" style="--p:${(left / (p.duration ?? 30)) * 100}"><span>${left}</span></div><h2>Auftrag wird ausgeführt</h2><b>${esc(p.title)}</b>${left === 0 ? `<p class="lbl">Das dauert etwas länger. Dein Auftrag bleibt offen.</p><button data-act="popClose">Schließen</button>` : `<p class="lbl">Das kann einen Moment dauern.</p>`}`;
-  m.innerHTML = `<div class="overlay"><div class="card sheet" role="dialog" aria-live="polite">${body}</div></div>`;
+function trackOrder(ref, title, kind, onAccepted) {
+  const p = (S.pop = { title, kind, start: Date.now(), duration: 60, phase: "wait", msg: "", reqStatus: "pending", un: [] });
+  p.un.push(onSnapshot(ref, (d) => {
+    const x = d.data(); if (S.pop !== p || !x) return;
+    p.reqStatus = x.status;
+    if (x.status === "error") { p.phase = "error"; p.msg = x.result || "Fehlgeschlagen"; }
+    if (x.status === "done") {
+      onAccepted?.();
+      if (x.orderId && !p.watch) {
+        p.watch = true;
+        p.un.push(onSnapshot(doc(db, "orders", x.orderId), (o) => {
+          if (S.pop !== p) return;
+          const st = o.data()?.status;
+          if (st === "done") { p.phase = "done"; renderModal(); }
+          else if (st === "rejected") { p.phase = "rejected"; renderModal(); }
+        }));
+      }
+    }
+    renderModal();
+  }, () => {}));
+  renderModal();
 }
-setInterval(() => { if (S.pop?.phase === "wait") renderModal(); }, 1000);
+function burst() {
+  if (reduce) return; const m = $("#modal");
+  for (let i = 0; i < 22; i++) {
+    const z = document.createElement("span"); z.className = "confetti"; z.textContent = ["🪙", "✨", "🎉", "💎"][i % 4];
+    z.style.setProperty("--x", Math.random() * 420 - 210 + "px"); z.style.setProperty("--y", -Math.random() * 320 - 40 + "px"); z.style.setProperty("--r", Math.random() * 540 - 270 + "deg");
+    m.append(z); setTimeout(() => z.remove(), 1200);
+  }
+}
+function renderModal() {
+  const m = $("#modal"), p = S.pop;
+  if (!p) { m.innerHTML = ""; m.dataset.k = ""; return; }
+  const dur = p.duration, left = Math.max(0, dur - Math.floor((Date.now() - p.start) / 1000));
+  const slow = p.phase === "wait" && p.reqStatus === "pending" && Date.now() - p.start > 10000;
+  const key = [p.phase, p.msg, left === 0, slow, p.reqStatus].join("|");
+  if (p.phase === "wait" && m.dataset.k === key) { const ring = m.querySelector(".ring"); if (ring) { ring.style.setProperty("--p", (left / dur) * 100); ring.querySelector("span").textContent = left; } return; }
+  m.dataset.k = key;
+  const sell = p.kind === "sell"; let body;
+  if (p.phase === "done") body = `<svg class="check" viewBox="0 0 52 52"><circle cx="26" cy="26" r="24"/><path d="M14 27l8 8 16-17"/></svg><h2>${sell ? "Verkauf angenommen" : "Auftrag ausgeführt"}</h2><p class="lbl">${sell ? "Deine Coins wurden gutgeschrieben." : "Deine Bestellung wurde geliefert. Viel Spaß!"}</p><button class="go" data-act="popClose">Super</button>`;
+  else if (p.phase === "rejected") body = `<div class="bad-x">✕</div><h2>${sell ? "Verkauf abgelehnt" : "Abgelehnt"}</h2><p class="lbl">${sell ? "Der Admin hat den Verkauf abgelehnt. Du bekommst keine Coins." : "Der Admin hat den Auftrag abgelehnt."}</p><button data-act="popClose">Schließen</button>`;
+  else if (p.phase === "error") body = `<div class="bad-x">✕</div><h2>${sell ? "Verkauf" : "Kauf"} fehlgeschlagen</h2><p class="lbl">${esc(p.msg)}</p><button data-act="popClose">Schließen</button>`;
+  else body = `<div class="ring" style="--p:${(left / dur) * 100}"><span>${left}</span></div><h2>${sell ? "Verkauf wird geprüft" : "Auftrag wird ausgeführt"}</h2><p class="lbl">${p.reqStatus === "done" ? "Dein Auftrag ist beim Admin eingegangen und wartet auf Bestätigung." : slow ? "Noch kein Admin hat reagiert. Sobald einer online ist, geht es weiter." : left === 0 ? "Das dauert etwas länger. Dein Auftrag bleibt offen." : "Das kann einen Moment dauern."}</p>${left === 0 ? `<button data-act="popClose">Schließen</button>` : ""}`;
+  m.innerHTML = `<div class="overlay"><div class="card sheet" role="dialog" aria-live="polite">${body}</div></div>`;
+  if (p.phase === "done") burst();
+}
+setInterval(() => { if (S.pop?.phase === "wait") renderModal(); }, 1000);;
 document.addEventListener("input", (e) => {
   if (e.target.id === "pq") { S.q = e.target.value; $("#plist").innerHTML = playerList(); }
   if (e.target.id === "admQ") { S.admQ = e.target.value; $("#admList").innerHTML = admShopList(); }
