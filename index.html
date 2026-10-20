@@ -455,20 +455,24 @@ function listen() {
     on(doc(db, "settings", "config"), (d) => (S.cfg = d.data() ?? {}));
     on(query(col("reports"), orderBy("createdAt", "desc"), limit(40)), (s) => (S.reports = list(s)));
     on(query(col("support_tickets"), orderBy("createdAt", "desc"), limit(60)), (s) => (S.support = list(s)));
-    on(query(col("orders"), orderBy("createdAt", "desc"), limit(80)), (s) => {
+    // Aufträge absichtlich ohne orderBy/Query: Firestore liefert sie damit zuverlässig
+    // in Echtzeit, ohne dass ein fehlender Index die komplette Admin-Liste lahmlegt.
+    on(col("orders"), (s) => {
       const before = S.orders.filter((o) => o.status === "open").length;
-      S.orders = list(s);
+      S.orders = list(s).sort((a, b) => (b.createdAt?.seconds ?? 0) - (a.createdAt?.seconds ?? 0));
       const now = S.orders.filter((o) => o.status === "open").length;
       if (!firstOrders && now > before) beep();
       firstOrders = false;
     });
+    // Auch Requests ohne Firestore-Query beobachten; nur pending wird verarbeitet.
+    on(col("requests"), (s) => {
+      for (const d of s.docs) {
+        const x = d.data();
+        if (x?.status === "pending" && !queue.some((q) => q.id === d.id)) queue.push(d);
+      }
+      drain().catch((e) => console.warn("Anfrage-Verarbeitung:", e));
+    });
   }
-  if (isStaff()) on(query(col("requests"), where("status", "==", "pending")), (s) => {
-    for (const d of s.docs) {
-      if (!queue.some((x) => x.id === d.id)) queue.push(d);
-    }
-    drain().catch((e) => console.warn("Anfrage-Verarbeitung:", e));
-  });
 }
 
 /* ================= Anfragen der Spieler → Verarbeitung im Admin-Browser ================= */
