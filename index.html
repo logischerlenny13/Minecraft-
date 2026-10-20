@@ -450,7 +450,7 @@ onAuthStateChanged(auth, (u) => {
 function stop() { unsubs.forEach((f) => f()); unsubs = []; started = false; teamUn?.(); teamUn = null; teamSeen = undefined; reqDocs = []; queue.length = 0; busy = false; }
 
 function listen() {
-  const on = (ref, fn) => unsubs.push(onSnapshot(ref, (s) => { fn(s); render(); }, (e) => console.warn(e.code)));
+  const on = (ref, fn) => unsubs.push(onSnapshot(ref, (s) => { fn(s); render(); }, (e) => console.warn("Firestore Listener:", e.code, e.message)));
   const list = (s) => s.docs.map((d) => ({ id: d.id, ...d.data() }));
   const col = (n) => collection(db, n);
   on(col("users"), (s) => (S.users = list(s)));
@@ -477,11 +477,8 @@ function listen() {
       firstOrders = false;
     });
   }
-  if (isStaff()) on(col("requests"), (s) => {
-    reqDocs = s.docs.filter((d) => {
-      const x = d.data();
-      return x?.status === "pending" || x?.status === "processing";
-    });
+  if (isStaff()) on(query(col("requests"), where("status", "in", ["pending", "processing"])), (s) => {
+    reqDocs = s.docs;
     pushReq();
   });
 }
@@ -560,18 +557,13 @@ const H = {
   },
   async cart(r) {
     const me0 = (await getDoc(U(r.uid))).data();
-    const last = me0?.lastShopOrderAt?.toMillis ? me0.lastShopOrderAt.toMillis() : Number(me0?.lastShopOrderAt || 0);
-    if (Date.now() - last < 60000) throw Error("Du kannst nur einmal pro Minute eine Bestellung aufgeben."); if (S.state?.phase === "end" && r.role === "player" && me0?.eliminated) throw Error("Du bist ausgeschieden und kannst nicht mehr bestellen");
+if (S.state?.phase === "end" && r.role === "player" && me0?.eliminated) throw Error("Du bist ausgeschieden und kannst nicht mehr bestellen");
     const rows = (r.payload.items || []).map((x) => ({ itemId: String(x.itemId), qty: Math.max(1, Math.min(99, Math.floor(+x.qty || 1))) })).slice(0, 40);
     if (!rows.length) throw Error("Warenkorb ist leer");
     const oref = doc(db, "orders", r.id);
     const msg = await runTransaction(db, async (t) => {
       const us = await t.get(U(r.uid));
       if ((await t.get(oref)).exists()) return "Bestellung bereits angelegt";
-    const currentUser = await t.get(U(r.uid));
-    const last = currentUser.data()?.lastShopOrderAt?.toMillis ? currentUser.data().lastShopOrderAt.toMillis() : Number(currentUser.data()?.lastShopOrderAt || 0);
-    if (Date.now() - last < 60000) throw Error("Du kannst nur einmal pro Minute eine Bestellung aufgeben.");
-    t.update(U(r.uid), { lastShopOrderAt: serverTimestamp() });
       const refs = rows.map((x) => doc(db, "shop_items", x.itemId));
       const snaps = []; for (const ref of refs) snaps.push(await t.get(ref));
       let total = 0; const bought = [];
@@ -1005,7 +997,7 @@ const ask = (t) => prompt(t)?.trim();
 const user = (id) => S.users.find((u) => u.id === id);
 const pun = async (u, type, reason) => { await addDoc(collection(db, "punishments"), { uid: u.id, gamertag: u.gamertag, type, reason, by: S.me.gamertag, active: true, createdAt: serverTimestamp() }); if (type === "jail" || type === "ban") newsAdd("punish", `${u.gamertag} wurde ${type === "jail" ? "in den Knast gesteckt" : "gebannt"}: ${reason}`).catch(() => {}); };
 const cartChanged = () => { S.bump = true; if (S.view === "shop" && S.shopPage === "browse" && $("#shopDyn")) shopRefresh(); else render(true); };
-async function submitSale() {
+async async function submitSale() {
   if (S.pop) return;
   if (!S.sellItem) throw Error("Bitte zuerst einen Artikel auswählen");
   if (outOfGame()) throw Error("Du bist ausgeschieden");
@@ -1099,13 +1091,10 @@ const FORM = {
   async cartCheckout(f) {
     if (S.pop) return;
     if (outOfGame()) throw Error("Du bist ausgeschieden und kannst nicht mehr bestellen");
-    const last = Number(localStorage.getItem("realmos_last_shop_order") || 0);
-    if (Date.now() - last < 60000) throw Error("Du kannst nur einmal pro Minute eine Bestellung aufgeben.");
     const items = Object.entries(S.cart).filter(([, qty]) => qty > 0).map(([itemId, qty]) => ({ itemId, qty }));
     if (!items.length) throw Error("Warenkorb ist leer");
     if (f.delivery.value === "chest") xyz(f.coords.value);
     const ref = await addDoc(collection(db, "requests"), { type: "cart", payload: { items, delivery: f.delivery.value, coords: f.coords.value.trim() }, uid: S.uid, status: "pending", createdAt: serverTimestamp() });
-    localStorage.setItem("realmos_last_shop_order", String(Date.now()));
     trackOrder(ref, "Bestellung", "shop", () => { S.cart = {}; });
   },
   async shopItem(f) { await setDoc(doc(db, "shop_items", slug(f.name.value)), { name: f.name.value.trim(), price: +f.price.value, category: f.category.value.trim() || "Sonstiges", stock: f.stock.value === "" ? null : Math.max(0, Math.floor(+f.stock.value)), packSize: Math.max(1, Math.floor(+(f.packSize?.value || 1))), minecraftId: (f.minecraftId?.value || "").trim(), icon: (f.icon?.value || "🧱").trim(), commands: f.commands.value.split("\n").map((s) => s.trim()).filter(Boolean), active: true }); toast("Artikel gespeichert", "ok"); },
