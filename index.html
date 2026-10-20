@@ -490,7 +490,7 @@ const H = {
     const clear = "/clear " + q(g) + " " + id + " 0 " + blocks;
     const oref = doc(collection(db, "orders"));
     await setDoc(oref, { kind: "sell", requestId: r.requestId || null, title: "Verkauf: " + qty + "× " + d.name, gamertag: g, uid: r.uid, itemId, itemName: d.name, minecraftId: id, packSize: pack, qty, blocks, unitSalePrice: price, total: price * qty, commands: [check, clear], note: "Prüfung: " + blocks + " Stück vorhanden. Der Prüf-Befehl entfernt die Ware nur bei ausreichender Menge.", status: "open", createdAt: serverTimestamp() });
-    return { msg: "Verkaufsauftrag wartet auf die Admin-Prüfung", orderId: oref.id, awaiting: true };
+    return { msg: "Verkaufsauftrag für " + fmt(price * qty) + " Coins erstellt", orderId: oref.id };
   },
   async transfer(r) {
     if (S.state?.phase === "end" && r.role === "player") { const me0 = (await getDoc(U(r.uid))).data(); if (me0?.eliminated) throw Error("Du bist ausgeschieden"); }
@@ -633,8 +633,8 @@ async function drain() {
     try {
       const r = d.data(), ru = (await getDoc(U(r.uid))).data();
       if (!ru || ru.status !== "active" || !H[r.type]) throw Error("Ungültige Anfrage");
-      const res = await H[r.type]({ ...r, requestId: d.id, role: ru.role, gamertag: ru.gamertag });
-      await updateDoc(ref, { status: res.awaiting ? "awaiting" : "done", result: res.msg ?? res, orderId: res.orderId ?? null });
+      const res = await H[r.type]({ ...r, role: ru.role, gamertag: ru.gamertag });
+      await updateDoc(ref, { status: "done", result: res.msg ?? res, orderId: res.orderId ?? null });
     } catch (e) { await updateDoc(ref, { status: "error", result: e.message }).catch(() => {}); }
   }
   busy = false;
@@ -962,9 +962,9 @@ async function submitSale() {
   p.un.push(onSnapshot(ref, (d) => {
     const s = d.data(); if (S.pop !== p || !s) return;
     if (s.status === "error") { p.phase = "error"; p.msg = s.result || "Verkauf fehlgeschlagen"; renderModal(); }
-    if (s.status === "awaiting" && s.orderId && !p.watch) {
+    if (s.status === "done" && s.orderId && !p.watch) {
       p.watch = true;
-      p.msg = "Dein Verkauf wurde an den Admin gesendet.";
+      p.msg = "Dein Verkaufsauftrag wurde an den Admin gesendet.";
       p.un.push(onSnapshot(doc(db, "orders", s.orderId), (o) => {
         const od = o.data(); if (S.pop !== p || !od) return;
         if (od.status === "done") { p.phase = "done"; p.msg = "Verkauf angenommen – " + fmt(od.total || 0) + " Coins wurden gutgeschrieben."; renderModal(); S.sellItem = ""; S.sellQty = 1; }
