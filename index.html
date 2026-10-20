@@ -382,6 +382,8 @@ const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "
 const fmt = (n) => Number(n ?? 0).toLocaleString("de-DE");
 const rank = () => ({ player: 1, mod: 2, admin: 3 }[S.me?.role] ?? 0), isStaff = () => rank() >= 2, isAdmin = () => rank() >= 3;
 const active = () => S.users.filter((u) => u.status === "active").sort((a, b) => a.gamertag.localeCompare(b.gamertag));
+const participants = () => active().filter((u) => u.role === "player" && !!u.teamId);
+const outOfGame = (u = S.me) => S.state?.phase === "end" && u?.role === "player" && u?.eliminated === true;
 const uname = (id) => S.users.find((u) => u.id === id)?.gamertag ?? "?";
 const date = (t) => (t?.toDate ? t.toDate().toLocaleString("de-DE", { dateStyle: "short", timeStyle: "short" }) : "–");
 const ago = (t) => { if (!t?.toMillis) return "gerade eben"; const s = Math.max(0, Math.round((Date.now() - t.toMillis()) / 1000)); if (s < 60) return "gerade eben"; if (s < 3600) return `vor ${Math.floor(s / 60)} Min`; if (s < 86400) return `vor ${Math.floor(s / 3600)} Std`; return date(t); };
@@ -476,6 +478,7 @@ const addTx = (t, uid, amount, reason, type, after) => t.set(doc(collection(db, 
 const addTeamTx = (t, teamId, amount, reason, by, after) => t.set(doc(collection(db, "tx")), { teamId, uid: null, amount, reason, by, type: "team", balanceAfter: after, ts: serverTimestamp() });
 const H = {
   async transfer(r) {
+    if (S.state?.phase === "end" && r.role === "player") { const me0 = (await getDoc(U(r.uid))).data(); if (me0?.eliminated) throw Error("Du bist ausgeschieden"); }
     const a = amt(r.payload.amount), from = r.payload.from; let to = r.payload.to;
     if (!["me", "team"].includes(from)) throw Error("Ungültiges Konto");
     if (to === r.uid) to = "me";
@@ -500,6 +503,8 @@ const H = {
     });
   },
   async bounty(r) {
+    if (S.state?.phase === "end") throw Error("In der Endphase sind neue Kopfgelder gesperrt");
+    const me0 = (await getDoc(U(r.uid))).data(); if (me0?.eliminated) throw Error("Du bist ausgeschieden");
     const a = amt(r.payload.amount), tg = r.payload.target;
     if (tg === r.uid) throw Error("Kein Kopfgeld auf dich selbst");
     return runTransaction(db, async (t) => {
@@ -517,6 +522,7 @@ const H = {
     return H.cart({ ...r, payload: { items: [{ itemId: r.payload.itemId, qty: r.payload.qty || 1 }], delivery: r.payload.delivery || "player", coords: r.payload.coords || "" } });
   },
   async cart(r) {
+    const me0 = (await getDoc(U(r.uid))).data(); if (S.state?.phase === "end" && r.role === "player" && me0?.eliminated) throw Error("Du bist ausgeschieden und kannst nicht mehr bestellen");
     const rows = (r.payload.items || []).map((x) => ({ itemId: String(x.itemId), qty: Math.max(1, Math.min(99, Math.floor(+x.qty || 1))) })).slice(0, 40);
     if (!rows.length) throw Error("Warenkorb ist leer");
     const oref = doc(collection(db, "orders"));
@@ -561,6 +567,7 @@ const H = {
     const bs = killer ? (await getDocs(query(collection(db, "bounties"), where("target", "==", victim), where("active", "==", true)))).docs : [];
     return runTransaction(db, async (t) => {
       const vs = await t.get(U(victim)), ks = killer ? await t.get(U(killer)) : null;
+      if (endgame) { if (vs.data().role !== "player" || !vs.data().teamId) throw Error("Dieser Nutzer nimmt nicht an der Endphase teil"); if (vs.data().eliminated) throw Error("Spieler ist bereits ausgeschieden"); if (killer && (ks.data().role !== "player" || !ks.data().teamId || ks.data().eliminated)) throw Error("Killer nimmt nicht aktiv an der Endphase teil"); }
       const live = []; for (const b of bs) { const s = await t.get(b.ref); if (s.exists() && s.data().active) live.push(s); }
       const total = live.reduce((x, s) => x + s.data().amount, 0);
       const newLives = endgame ? Math.max(0, (vs.data().lives ?? 3) - 1) : null;
@@ -629,7 +636,7 @@ async function setPhase(phase, min, next) {
   if (phase === "minigame") await openMinigameVote();
   if (phase === "end") {
     const batch = writeBatch(db);
-    active().forEach((u) => batch.update(U(u.id), { lives: 3, eliminated: false }));
+    participants().forEach((u) => batch.update(U(u.id), { lives: 3, eliminated: false }));
     await batch.commit();
     newsAdd("phase", "Endphase gestartet · Jeder Spieler hat ❤️❤️❤️").catch(() => {});
   }
@@ -660,7 +667,7 @@ async function resetEvent() {
 }
 
 /* ================= Views ================= */
-const userOpts = (sel = "", skipMe = false) => active().filter((u) => !(skipMe && u.id === S.uid)).map((u) => `<option value="${u.id}" ${u.id === sel ? "selected" : ""}>${esc(u.gamertag)}</option>`).join("");
+const userOpts = (sel = "", skipMe = false) => (S.state?.phase === "end" ? participants().filter((u) => !u.eliminated) : active()).filter((u) => !(skipMe && u.id === S.uid)).map((u) => `<option value="${u.id}" ${u.id === sel ? "selected" : ""}>${esc(u.gamertag)}</option>`).join("");
 
 function orderCard(o) {
   return `<div class="order"><div class="oh"><b>${esc(o.title)}</b><span class="lbl">${esc(o.gamertag ?? "")} · ${date(o.createdAt)}</span></div>${o.note ? `<div class="lbl">${esc(o.note)}</div>` : ""}
@@ -726,6 +733,7 @@ const V = {
       <div class="card"><h3>Umsätze · ${tab === "team" ? "Team-Konto" : "Mein Konto"}</h3>${list.length ? list.map(txRow).join("") : `<p class="empty">Noch keine Buchungen.</p>`}</div>`;
   },
   bounty() {
+    if (S.state?.phase === "end") { const sum = {}; S.bounties.forEach((b) => (sum[b.targetName] = (sum[b.targetName] ?? 0) + b.amount)); const top = Object.entries(sum).sort((a,b)=>b[1]-a[1]); return `<div class="card"><h3>🔒 Kopfgeld eingefroren</h3><p class="lbl">In der Endphase können keine neuen Kopfgelder ausgesetzt werden. Bestehende Kopfgelder bleiben aktiv.</p>${top.length ? `<table><tbody>${top.map(([n,a])=>`<tr><td>${esc(n)}</td><td class="pos">${fmt(a)} Coins</td></tr>`).join("")}</tbody></table>` : `<p class="empty">Niemand ist ausgeschrieben.</p>`}</div>`; }
     const targets = active().filter((u) => u.id !== S.uid && (!S.me.teamId || u.teamId !== S.me.teamId)), sum = {};
     S.bounties.forEach((b) => (sum[b.targetName] = (sum[b.targetName] ?? 0) + b.amount));
     const top = Object.entries(sum).sort((a, b) => b[1] - a[1]);
@@ -734,6 +742,7 @@ const V = {
       <div class="card"><h3>Aktive Kopfgelder</h3>${top.length ? `<table><tbody>${top.map(([n, a]) => `<tr><td>${esc(n)}</td><td class="pos">${fmt(a)} Coins</td></tr>`).join("")}</tbody></table>` : `<p class="empty">Niemand ist ausgeschrieben.</p>`}</div></div>`;
   },
   shop() {
+    if (outOfGame()) return `<div class="card"><h3>☠ Du bist ausgeschieden</h3><p class="lbl">Der Shop ist für dich in der Endphase gesperrt. News und Konto bleiben verfügbar.</p></div>`;
     const rows = cartRowsOf(), total = rows.reduce((n, x) => n + (+x.it.price || 0) * x.qty, 0), blocks = rows.reduce((n, x) => n + (+x.it.packSize || 1) * x.qty, 0);
     if (S.shopPage === "cart") return `<div class="checkout-layout"><div class="card"><h3>${rows.length} Artikel · ${fmt(blocks)} Stück</h3>${rows.length ? rows.map((x) => `<div class="cart-row"><div>${imgTag(x.it.id)}</div><div><b>${esc(x.it.name)}</b><small>${x.qty} × ${x.it.packSize || 1}</small></div><div class="cart-step"><button data-act="cartMinus" data-id="${esc(x.it.id)}">−</button><b>${x.qty}</b><button data-act="cartPlus" data-id="${esc(x.it.id)}">+</button></div><b>${fmt((+x.it.price || 0) * x.qty)} 🪙</b></div>`).join("") : '<p class="empty">Warenkorb leer.</p>'}</div>
       <form class="card checkout" data-form="cartCheckout"><h3>Bestellung</h3><div class="sum"><span>Gesamt</span><b class="gold">${fmt(total)} 🪙</b></div><label>Lieferung</label><select name="delivery"><option value="player">Direkt ins Inventar</option><option value="chest">In Kiste liefern</option></select><label>Kisten-Koordinaten</label><input name="coords" placeholder="x y z – nur bei Kistenlieferung"><button class="go wide" ${rows.length ? "" : "disabled"}>Jetzt bestellen</button><button type="button" class="wide" data-act="cartClear">Leeren</button></form></div>`;
@@ -935,12 +944,12 @@ const FORM = {
       } else await signInWithEmailAndPassword(auth, mail(g), p);
     } catch (e) { S.authMsg = { "auth/email-already-in-use": "Dieser Gamertag ist schon registriert.", "auth/invalid-credential": "Gamertag oder Passwort falsch.", "auth/weak-password": "Passwort zu kurz." }[e.code] ?? e.message; loginView(); }
   },
-  transfer: (f) => req("transfer", { from: f.from.value, to: f.to.value, amount: +f.amount.value }),
-  bounty: (f) => req("bounty", { target: f.target.value, amount: +f.amount.value }),
+  transfer: (f) => { if (outOfGame()) throw Error("Du bist ausgeschieden"); return req("transfer", { from: f.from.value, to: f.to.value, amount: +f.amount.value }); },
+  bounty: (f) => { if (S.state?.phase === "end") throw Error("In der Endphase sind neue Kopfgelder gesperrt"); if (outOfGame()) throw Error("Du bist ausgeschieden"); return req("bounty", { target: f.target.value, amount: +f.amount.value }); },
   async report(f) { await addDoc(collection(db, "reports"), { uid: S.uid, reporterName: S.me.gamertag, target: f.target.value, targetName: uname(f.target.value), reason: f.reason.value, text: f.text.value.trim(), status: "open", createdAt: serverTimestamp() }); toast("Meldung gesendet", "ok"); },
   async supportCall(f) { await addDoc(collection(db, "support_tickets"), { uid: S.uid, gamertag: S.me.gamertag, reason: f.reason.value, text: f.text.value.trim(), type: "call", status: "open", createdAt: serverTimestamp() }); toast("Supporter wurde gerufen", "ok"); },
   async newsPost(f) { if (!isStaff()) throw Error("Keine Berechtigung"); await newsAdd("info", f.text.value, S.me.gamertag); toast("News veröffentlicht", "ok"); },
-  async cartCheckout(f) { const items = Object.entries(S.cart).filter(([, qty]) => qty > 0).map(([itemId, qty]) => ({ itemId, qty })); if (!items.length) throw Error("Warenkorb ist leer"); if (f.delivery.value === "chest") xyz(f.coords.value); const ref = await addDoc(collection(db, "requests"), { type: "cart", payload: { items, delivery: f.delivery.value, coords: f.coords.value.trim() }, uid: S.uid, status: "pending", createdAt: serverTimestamp() }); const p = (S.pop = { title: "Bestellung", start: Date.now(), duration: 30, phase: "wait", msg: "", un: [] }); p.un.push(onSnapshot(ref, (d) => { const s = d.data(); if (S.pop !== p || !s) return; if (s.status === "error") { p.phase = "error"; p.msg = s.result || "Bestellung fehlgeschlagen"; renderModal(); } if (s.status === "done") { S.cart = {}; p.msg = s.result || "Bestellung angenommen"; if (s.orderId && !p.watch) { p.watch = true; p.un.push(onSnapshot(doc(db, "orders", s.orderId), (o) => { if (S.pop === p && o.data()?.status === "done") { p.phase = "done"; renderModal(); } })); } renderModal(); } })); renderModal(); },
+  async cartCheckout(f) { if (outOfGame()) throw Error("Du bist ausgeschieden und kannst nicht mehr bestellen"); const items = Object.entries(S.cart).filter(([, qty]) => qty > 0).map(([itemId, qty]) => ({ itemId, qty })); if (!items.length) throw Error("Warenkorb ist leer"); if (f.delivery.value === "chest") xyz(f.coords.value); const ref = await addDoc(collection(db, "requests"), { type: "cart", payload: { items, delivery: f.delivery.value, coords: f.coords.value.trim() }, uid: S.uid, status: "pending", createdAt: serverTimestamp() }); const p = (S.pop = { title: "Bestellung", start: Date.now(), duration: 30, phase: "wait", msg: "", un: [] }); p.un.push(onSnapshot(ref, (d) => { const s = d.data(); if (S.pop !== p || !s) return; if (s.status === "error") { p.phase = "error"; p.msg = s.result || "Bestellung fehlgeschlagen"; renderModal(); } if (s.status === "done") { S.cart = {}; p.msg = s.result || "Bestellung angenommen"; if (s.orderId && !p.watch) { p.watch = true; p.un.push(onSnapshot(doc(db, "orders", s.orderId), (o) => { if (S.pop === p && o.data()?.status === "done") { p.phase = "done"; renderModal(); } })); } renderModal(); } })); renderModal(); },
   death: (f) => { S.victim = ""; return req("kill", { victim: f.victim.value, killer: f.killer.value || null, bountyAmount: f.killer.value && f.bo.checked ? Math.max(0, Math.floor(+f.ba.value || 0)) : 0 }); },
   broadcast: (f) => order("Broadcast", [...(f.sub.value.trim() ? [`/title @a subtitle ${clean(f.sub.value)}`] : []), `/title @a title ${clean(f.title.value)}`]),
   clear: (f) => order(`Item entfernen: ${uname(f.uid.value)}`, [`/clear ${q(uname(f.uid.value))} ${f.item.value.trim()}`]),
