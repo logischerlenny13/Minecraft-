@@ -382,7 +382,7 @@ const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "
 const fmt = (n) => Number(n ?? 0).toLocaleString("de-DE");
 const rank = () => ({ player: 1, mod: 2, admin: 3 }[S.me?.role] ?? 0), isStaff = () => rank() >= 2, isAdmin = () => rank() >= 3;
 const active = () => S.users.filter((u) => u.status === "active").sort((a, b) => a.gamertag.localeCompare(b.gamertag));
-const participants = () => active().filter((u) => u.role === "player" && !!u.teamId);
+const participants = () => active().filter((u) => u.role === "player");
 const outOfGame = (u = S.me) => S.state?.phase === "end" && u?.role === "player" && u?.eliminated === true;
 const uname = (id) => S.users.find((u) => u.id === id)?.gamertag ?? "?";
 const date = (t) => (t?.toDate ? t.toDate().toLocaleString("de-DE", { dateStyle: "short", timeStyle: "short" }) : "–");
@@ -569,7 +569,7 @@ const H = {
     const bs = killer ? (await getDocs(query(collection(db, "bounties"), where("target", "==", victim), where("active", "==", true)))).docs : [];
     return runTransaction(db, async (t) => {
       const vs = await t.get(U(victim)), ks = killer ? await t.get(U(killer)) : null;
-      if (endgame) { if (vs.data().role !== "player" || !vs.data().teamId) throw Error("Dieser Nutzer nimmt nicht an der Endphase teil"); if (vs.data().eliminated) throw Error("Spieler ist bereits ausgeschieden"); if (killer && ks.data().role === "player" && (!ks.data().teamId || ks.data().eliminated)) throw Error("Killer nimmt nicht aktiv an der Endphase teil"); }
+      if (endgame) { if (!vs.exists() || vs.data().role !== "player") throw Error("Dieser Nutzer nimmt nicht an der Endphase teil"); if (vs.data().eliminated) throw Error("Spieler ist bereits ausgeschieden"); if (killer && ks.data().role === "player" && ks.data().eliminated) throw Error("Killer nimmt nicht aktiv an der Endphase teil"); }
       const live = []; for (const b of bs) { const s = await t.get(b.ref); if (s.exists() && s.data().active) live.push(s); }
       const total = live.reduce((x, s) => x + s.data().amount, 0);
       const newLives = endgame ? Math.max(0, (vs.data().lives ?? 3) - 1) : null;
@@ -637,10 +637,12 @@ async function setPhase(phase, min, next) {
   newsAdd("phase", `Neue Phase: ${ph.label}${min ? ` (${min} Min)` : ""}`).catch(() => {});
   if (phase === "minigame") await openMinigameVote();
   if (phase === "end") {
+    const ps = participants();
+    const pids = new Set(ps.map((u) => u.id));
     const batch = writeBatch(db);
-    participants().forEach((u) => batch.update(U(u.id), { lives: 3, eliminated: false }));
+    active().forEach((u) => batch.update(U(u.id), pids.has(u.id) ? { lives: 3, eliminated: false } : { lives: null, eliminated: false }));
     await batch.commit();
-    newsAdd("phase", "Endphase gestartet · Jeder Spieler hat ❤️❤️❤️").catch(() => {});
+    newsAdd("phase", `Endphase gestartet · ${ps.length} Spieler haben ❤️❤️❤️`).catch(() => {});
   }
 }
 async function nextPlannedPhase() {
@@ -707,7 +709,7 @@ const V = {
     const openN = isStaff() ? S.orders.filter((o) => o.status === "open").length + S.support.filter((t) => t.status === "open").length : 0;
     const apps = [["wallet", "💳", "Konto"], ["shop", "🧱", "Shop"], ["news", "📰", "News"], ["support", "🛟", "Support"], ["bounty", "🎯", "Kopfgeld"], ["vote", "🗳️", "Abstimmung"], ["punish", "⚖️", "Strafen"]];
     if (isStaff()) apps.push(["admin", "🛡️", "Admin"]); apps.push(["settings", "⚙️", "Einstellungen"]);
-    return `<section class="hello"><small>${greet}</small><h1>${esc(u.gamertag)}</h1><div class="chips-row"><span class="chipx">🪙 <b data-count="${u.balance || 0}">${fmt(u.balance)}</b></span><span class="chipx">⚔️ ${fmt(u.kills)} Kills</span><span class="chipx">☠ ${fmt(u.deaths)} Tode</span>${S.state?.phase === "end" ? `<span class="chipx">${"❤️".repeat(Math.max(0,u.lives ?? 3))}${"🖤".repeat(Math.max(0,3-(u.lives ?? 3)))}</span>` : ""}${S.state ? `<span class="chipx gold">⚡ ${esc(S.state.label)}</span>` : ""}</div></section>
+    return `<section class="hello"><small>${greet}</small><h1>${esc(u.gamertag)}</h1><div class="chips-row"><span class="chipx">🪙 <b data-count="${u.balance || 0}">${fmt(u.balance)}</b></span><span class="chipx">⚔️ ${fmt(u.kills)} Kills</span><span class="chipx">☠ ${fmt(u.deaths)} Tode</span>${S.state?.phase === "end" && u.role === "player" ? `<span class="chipx">${"❤️".repeat(Math.max(0,Math.min(3,u.lives ?? 0)))}${"🖤".repeat(Math.max(0,3-Math.max(0,Math.min(3,u.lives ?? 0))))}</span>` : ""}${S.state ? `<span class="chipx gold">⚡ ${esc(S.state.label)}</span>` : ""}</div></section>
     <div class="homegrid"><div class="tiles">${apps.map(([v, ic, n], i) => `<button class="tile" style="--i:${i + 2}" data-act="nav" data-v="${v}"><span class="ic">${ic}</span><span>${n}</span>${v === "admin" && openN ? `<span class="badge">${openN}</span>` : ""}</button>`).join("")}</div>
     <div class="card newscard"><div class="row between"><h3><span class="live"></span>Newsboard</h3><button class="sm" data-act="nav" data-v="news">Alle</button></div>${S.news.length ? newsList(S.news.slice(0, 5)) : '<p class="empty">Noch keine News.</p>'}</div></div>`;
   },
