@@ -447,7 +447,7 @@ onAuthStateChanged(auth, (u) => {
     render(true);
   });
 });
-function stop() { unsubs.forEach((f) => f()); unsubs = []; started = false; teamUn?.(); teamUn = null; teamSeen = undefined; }
+function stop() { unsubs.forEach((f) => f()); unsubs = []; started = false; teamUn?.(); teamUn = null; teamSeen = undefined; reqDocs = []; queue.length = 0; busy = false; }
 
 function listen() {
   const on = (ref, fn) => unsubs.push(onSnapshot(ref, (s) => { fn(s); render(); }, (e) => console.warn(e.code)));
@@ -896,7 +896,7 @@ const V = {
     if (!FT.some((t) => t[0] === S.fullTab)) S.fullTab = FT[0][0];
     const F = (t) => S.fullTab === t, pend = S.users.filter((u) => u.status === "pending").length;
     const tabs = `<div class="tabs">${FT.map(([k, l]) => `<button class="${F(k) ? "on" : ""}" data-act="fullTab" data-t="${k}">${l}${k === "players" && pend ? `<span class="badge">${pend}</span>` : ""}</button>`).join("")}</div>`;
-    const done = S.orders.filter((o) => o.status === "done").slice(0, 25);
+    const done = S.orders.filter((o) => o.status !== "open").slice(0, 25);
     const adminOnly = isAdmin() ? `
       ${F("players") ? `<div class="card"><h3>Spieler verwalten</h3><div class="scroll"><table><thead><tr><th>Spieler</th><th>Rolle</th><th>Coins</th><th>Team</th></tr></thead><tbody>${active().map((u) => `<tr><td>${esc(u.gamertag)}</td>
         <td><select data-role="${u.id}" style="width:auto">${["player", "mod", "admin"].map((r) => `<option ${u.role === r ? "selected" : ""}>${r}</option>`).join("")}</select></td><td>${fmt(u.balance)}</td><td>${esc(S.teams.find((t) => t.id === u.teamId)?.name ?? "–")}</td></tr>`).join("")}</tbody></table></div></div>` : ""}
@@ -928,7 +928,7 @@ const V = {
       ${F("event") ? `<form class="card" data-form="clear"><h3>Item entfernen</h3><label for="ku">Spieler</label><select id="ku" name="uid">${userOpts()}</select><label for="ki">Item-ID</label><input id="ki" name="item" placeholder="diamond_sword" pattern="[a-z0-9_:]+" required><p><button class="bad">Auftrag erstellen</button></p></form>` : ""}</div>
       ${F("reports") ? `<div class="card"><h3>Aktive Strafen verwalten</h3>${S.pun.length ? `<table><tbody>${S.pun.map((p) => `<tr><td>${esc(p.gamertag)}</td><td>${esc(p.type)}</td><td>${esc(p.reason)}</td><td><button class="sm" data-act="punEnd" data-id="${p.id}">Beenden</button></td></tr>`).join("")}</tbody></table>` : `<p class="empty">Keine.</p>`}</div>` : ""}
       ${F("reports") ? `<div class="card"><h3>Meldungen</h3>${S.reports.length ? `<div class="scroll"><table><tbody>${S.reports.map((r) => `<tr><td>${esc(r.reporterName)}</td><td>→ ${esc(r.targetName)}</td><td>${esc(r.reason)}</td><td>${esc(r.text)}</td><td>${r.status === "open" ? `<button class="sm go" data-act="repDone" data-id="${r.id}">Erledigt</button>` : '<span class="tag g">ok</span>'}</td></tr>`).join("")}</tbody></table></div>` : `<p class="empty">Keine Meldungen.</p>`}</div>` : ""}
-      ${F("history") ? `<div class="card"><h3>Letzte erledigte Aufträge</h3>${done.length ? `<table><tbody>${done.map((o) => `<tr><td>${esc(o.title)}</td><td>${esc(o.gamertag ?? "")}</td><td class="lbl">${esc(o.doneBy ?? "")}</td></tr>`).join("")}</tbody></table>` : `<p class="empty">Noch keine.</p>`}</div>` : ""}`;
+      ${F("history") ? `<div class="card"><h3>Letzte erledigte Aufträge</h3>${done.length ? `<table><tbody>${done.map((o) => `<tr><td>${o.status === "rejected" ? "✕" : "✓"} ${esc(o.title)}</td><td>${esc(o.gamertag ?? "")}</td><td class="lbl">${esc(o.doneBy ?? "")}</td></tr>`).join("")}</tbody></table>` : `<p class="empty">Noch keine.</p>`}</div>` : ""}`;
   },
 };
 const cfgFields = () => `<label>Knast-Position (x y z)</label><input name="jail" value="${esc(C().jail)}"><label>Spawn (x y z)</label><input name="spawn" value="${esc(C().spawn)}"><label>Minigame (x y z)</label><input name="minigame" value="${esc(C().minigame)}">
