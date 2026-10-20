@@ -198,7 +198,7 @@ const GRASS = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAGAAAABgCAYAAADimHc
 
 /* ================= State & Helfer ================= */
 const CFG0 = { jail: "0 200 0", spawn: "0 100 0", minigame: "0 100 0", startCoins: 100, killReward: 25, bountyOnKill: 50 };
-const S = { fullTab: "", adminMode: "quick", eventPlan: [], walTab: "me", sendFrom: "me", openUser: "", q: "", admQ: "", shopQ: "", shopCat: "Alle", shopLimit: 60, cart: {}, shopPage: "browse", bump: false, pop: null, teamTx: [], uid: null, me: null, view: "home", mode: "login", authMsg: "", victim: "", users: [], tx: [], teams: [], shop: [], pun: [], bounties: [], myOrders: [], orders: [], reports: [], support: [], mySupport: [], news: [], state: null, vote: null, ballots: [], cfg: {} };
+const S = { fullTab: "", adminMode: "quick", eventPlan: [], walTab: "me", sendFrom: "me", openUser: "", q: "", admQ: "", shopQ: "", shopCat: "Alle", shopLimit: 60, cart: {}, shopPage: "browse", sellQ: "", sellCat: "Alle", sellLimit: 60, sellQty: 1, sellItem: "", bump: false, pop: null, teamTx: [], uid: null, me: null, view: "home", mode: "login", authMsg: "", victim: "", users: [], tx: [], teams: [], shop: [], pun: [], bounties: [], myOrders: [], orders: [], reports: [], support: [], mySupport: [], news: [], state: null, vote: null, ballots: [], cfg: {} };
 let teamSeen, teamUn, unsubs = [], started = false, dirty = false, firstOrders = true, busy = false, catalogSeedStarted = false, lastKey = "", enterTimer;
 const C = () => ({ ...CFG0, ...S.cfg });
 
@@ -477,6 +477,21 @@ const U = (id) => doc(db, "users", id);
 const addTx = (t, uid, amount, reason, type, after) => t.set(doc(collection(db, "tx")), { uid, amount, reason, type, balanceAfter: after, ts: serverTimestamp() });
 const addTeamTx = (t, teamId, amount, reason, by, after) => t.set(doc(collection(db, "tx")), { teamId, uid: null, amount, reason, by, type: "team", balanceAfter: after, ts: serverTimestamp() });
 const H = {
+  async sell(r) {
+    if (S.state?.phase === "end" && r.role === "player") throw Error("Verkäufe sind in der Endphase gesperrt");
+    const p = r.payload || {}, itemId = String(p.itemId || ""), qty = Math.max(1, Math.min(99, Math.floor(+p.qty || 1)));
+    const snap = await getDoc(doc(db, "shop_items", itemId));
+    if (!snap.exists() || !snap.data().active) throw Error("Artikel nicht verfügbar");
+    const d = snap.data(), pack = Math.max(1, Math.floor(+d.packSize || 1)), price = Math.round((+d.price || 0) * 0.75), blocks = pack * qty;
+    if (!d.minecraftId) throw Error("Für diesen Artikel ist keine Minecraft-ID hinterlegt");
+    if (price <= 0) throw Error("Dieser Artikel hat keinen auszahlbaren Verkaufspreis");
+    const g = r.gamertag, id = String(d.minecraftId).replace(/^minecraft:/, "");
+    const check = "/execute if entity @a[name=" + q(g) + ",hasitem={item=" + id + ",quantity=" + blocks + "..}] run clear @a[name=" + q(g) + "] " + id + " 0 " + blocks;
+    const clear = "/clear " + q(g) + " " + id + " 0 " + blocks;
+    const oref = doc(collection(db, "orders"));
+    await setDoc(oref, { kind: "sell", title: "Verkauf: " + qty + "× " + d.name, gamertag: g, uid: r.uid, itemId, itemName: d.name, minecraftId: id, packSize: pack, qty, blocks, unitSalePrice: price, total: price * qty, commands: [check, clear], note: "Prüfung: " + blocks + " Stück vorhanden. Der Prüf-Befehl entfernt die Ware nur bei ausreichender Menge.", status: "open", createdAt: serverTimestamp() });
+    return { msg: "Verkaufsauftrag für " + fmt(price * qty) + " Coins erstellt", orderId: oref.id };
+  },
   async transfer(r) {
     if (S.state?.phase === "end" && r.role === "player") { const me0 = (await getDoc(U(r.uid))).data(); if (me0?.eliminated) throw Error("Du bist ausgeschieden"); }
     const a = amt(r.payload.amount), from = r.payload.from; let to = r.payload.to;
@@ -591,6 +606,23 @@ const H = {
   },
 };
 const queue = [];
+async function completeSale(orderId) {
+  if (!isStaff()) throw Error("Nur Admin/Support darf Verkäufe bestätigen");
+  await runTransaction(db, async (t) => {
+    const oref = doc(db, "orders", orderId), os = await t.get(oref);
+    if (!os.exists()) throw Error("Verkaufsauftrag nicht gefunden");
+    const o = os.data();
+    if (o.kind !== "sell") throw Error("Kein Verkaufsauftrag");
+    if (o.status !== "open") throw Error("Dieser Verkauf wurde bereits abgeschlossen");
+    const uref = U(o.uid), us = await t.get(uref);
+    if (!us.exists() || us.data().status !== "active") throw Error("Spielerkonto nicht verfügbar");
+    const amount = Math.max(0, Math.floor(+o.total || 0)), bal = +us.data().balance || 0;
+    t.update(uref, { balance: bal + amount });
+    addTx(t, o.uid, amount, "Verkauf: " + o.itemName + " (" + o.blocks + " Stück)", "sell", bal + amount);
+    t.update(oref, { status: "done", doneAt: serverTimestamp(), doneBy: S.me.gamertag });
+  });
+  toast("Verkauf bestätigt und Coins gutgeschrieben", "ok");
+}
 async function drain() {
   if (busy) return; busy = true;
   while (queue.length) {
@@ -676,7 +708,7 @@ const userOpts = (sel = "", skipMe = false) => (S.state?.phase === "end" ? parti
 function orderCard(o) {
   return `<div class="order"><div class="oh"><b>${esc(o.title)}</b><span class="lbl">${esc(o.gamertag ?? "")} · ${date(o.createdAt)}</span></div>${o.note ? `<div class="lbl">${esc(o.note)}</div>` : ""}
     ${(o.commands ?? []).map((c) => `<div class="cmd"><code>${esc(c)}</code><button class="sm" data-act="copy" data-t="${esc(c)}">Kopieren</button></div>`).join("")}
-    <div class="row"><button class="sm" data-act="copyAll" data-id="${o.id}">Alle kopieren</button><button class="go sm" data-act="done" data-id="${o.id}">Fertig</button></div></div>`;
+    <div class="row"><button class="sm" data-act="copyAll" data-id="${o.id}">Alle kopieren</button>${o.kind === "sell" ? `<button class="go sm" data-act="done" data-id="${o.id}">✓ Prüfung erfolgreich</button>` : `<button class="go sm" data-act="done" data-id="${o.id}">Fertig</button>`}</div></div>`;
 }
 const pendingBox = () => { const p = S.users.filter((u) => u.status === "pending"); return isAdmin() && p.length ? `<div class="card warn"><h3>Neue Anmeldungen (${p.length})</h3>${p.map((u) => `<div class="row" style="margin:.3rem 0"><b>${esc(u.gamertag)}</b><button class="sm go" data-act="approve" data-id="${u.id}">Freischalten</button><button class="sm bad" data-act="reject" data-id="${u.id}">Ablehnen</button></div>`).join("")}</div>` : ""; };
 const newsList = (items, del = false) => items.map((n, i) => `<div class="news-item" style="--i:${i + 2}"><span class="nic">${NI[n.type] || "📣"}</span><div><div>${esc(n.text)}</div><small>${ago(n.createdAt)}${n.by ? " · " + esc(n.by) : ""}</small></div>${del && isStaff() ? `<button class="sm" data-act="newsDel" data-id="${n.id}" aria-label="Löschen">✕</button>` : "<span></span>"}</div>`).join("");
@@ -730,7 +762,7 @@ const V = {
   home() {
     const u = S.me, hr = new Date().getHours(), greet = hr < 5 ? "Gute Nacht" : hr < 11 ? "Guten Morgen" : hr < 18 ? "Guten Tag" : "Guten Abend";
     const openN = isStaff() ? S.orders.filter((o) => o.status === "open").length + S.support.filter((t) => t.status === "open").length : 0;
-    const apps = [["wallet", "💳", "Konto"], ["shop", "🧱", "Shop"], ["news", "📰", "News"], ["support", "🛟", "Support"], ["bounty", "🎯", "Kopfgeld"], ["vote", "🗳️", "Abstimmung"], ["punish", "⚖️", "Strafen"]];
+    const apps = [["wallet", "💳", "Konto"], ["shop", "🧱", "Shop"], ["sell", "💰", "Verkaufen"], ["news", "📰", "News"], ["support", "🛟", "Support"], ["bounty", "🎯", "Kopfgeld"], ["vote", "🗳️", "Abstimmung"], ["punish", "⚖️", "Strafen"]];
     if (isStaff()) apps.push(["admin", "🛡️", "Admin"]); apps.push(["settings", "⚙️", "Einstellungen"]);
     return `<section class="hello"><small>${greet}</small><h1>${esc(u.gamertag)}</h1><div class="chips-row"><span class="chipx">🪙 <b data-count="${u.balance || 0}">${fmt(u.balance)}</b></span><span class="chipx">⚔️ ${fmt(u.kills)} Kills</span><span class="chipx">☠ ${fmt(u.deaths)} Tode</span>${S.state?.phase === "end" && u.role === "player" ? `<span class="chipx">${"❤️".repeat(Math.max(0,Math.min(3,u.lives ?? 0)))}${"🖤".repeat(Math.max(0,3-Math.max(0,Math.min(3,u.lives ?? 0))))}</span>` : ""}${S.state ? `<span class="chipx gold">⚡ ${esc(S.state.label)}</span>` : ""}</div></section>
     <div class="homegrid"><div class="tiles">${apps.map(([v, ic, n], i) => `<button class="tile" style="--i:${i + 2}" data-act="nav" data-v="${v}"><span class="ic">${ic}</span><span>${n}</span>${v === "admin" && openN ? `<span class="badge">${openN}</span>` : ""}</button>`).join("")}</div>
@@ -767,6 +799,18 @@ const V = {
     return `<div class="cols"><form class="card" data-form="bounty"><h3>Kopfgeld aussetzen</h3><label for="bt">Ziel</label><select id="bt" name="target" required>${targets.map((u) => `<option value="${u.id}">${esc(u.gamertag)}</option>`).join("")}</select>
       <label for="ba">Betrag</label><input id="ba" name="amount" type="number" min="1" required><p><button class="go">Aussetzen</button></p></form>
       <div class="card"><h3>Aktive Kopfgelder</h3>${top.length ? `<table><tbody>${top.map(([n, a]) => `<tr><td>${esc(n)}</td><td class="pos">${fmt(a)} Coins</td></tr>`).join("")}</tbody></table>` : `<p class="empty">Niemand ist ausgeschrieben.</p>`}</div></div>`;
+  },
+  sell() {
+    if (outOfGame()) return '<div class="card"><h3>☠ Du bist ausgeschieden</h3><p class="lbl">Verkaufen ist für dich in der Endphase gesperrt.</p></div>';
+    const raw = S.sellQ.trim().toLowerCase(), us = raw.replace(/\s+/g, "_"), ci = (c) => { const k = CAT_ORDER.indexOf(c); return k < 0 ? 99 : k; };
+    const items = S.shop.filter((i) => i.active && !String(i.id).startsWith("std_") && (S.sellCat === "Alle" || (i.category || "Sonstiges") === S.sellCat) && (!raw || String(i.name).toLowerCase().includes(raw) || String(i.id).toLowerCase().includes(us) || String(i.minecraftId || "").toLowerCase().includes(us))).sort((a,b)=>ci(a.category)-ci(b.category)||String(a.name).localeCompare(String(b.name)));
+    const shown = items.slice(0, S.sellLimit), selected = S.shop.find((x) => x.id === S.sellItem), sp = selected ? Math.round((+selected.price || 0) * 0.75) : 0;
+    const cats = ["Alle", ...[...new Set(S.shop.filter(i => i.active && !String(i.id).startsWith("std_")).map(i => i.category || "Sonstiges"))].sort((a,b)=>{const x=CAT_ORDER.indexOf(a),y=CAT_ORDER.indexOf(b);return (x<0?99:x)-(y<0?99:y)||a.localeCompare(b);})];
+    return `<div class="pagehead"><p>Verkaufe vorhandene Shop-Artikel zurück. Der Verkaufspreis beträgt automatisch 75 % des aktuellen Shoppreises.</p></div>
+      <div class="shophead"><input id="sellSearch" type="search" placeholder="Minecraft-Item suchen …" value="${esc(S.sellQ)}" autocomplete="off"><span class="chip-bal">🪙 Verkauf = 75 %</span></div>
+      <div class="cats">${cats.map(x=>`<button class="${S.sellCat===x?"on":""}" data-act="sellCat" data-cat="${esc(x)}">${esc(x)}</button>`).join("")}</div>
+      ${selected ? `<div class="card" style="margin-bottom:.9rem"><div class="row between"><div class="row nowrap"><div class="pa" style="position:relative;width:76px;height:76px;display:grid;place-items:center">${imgTag(selected.id)}<span class="em">${esc(selected.icon||"🧱")}</span></div><div><small class="lbl">${esc(selected.category||"Block")}</small><h3 style="margin:.1rem 0">${esc(selected.name)}</h3><div class="lbl">${Math.max(1,+selected.packSize||1)}er-Pack · ${fmt(selected.price)} 🪙 Shoppreis</div></div></div><div style="text-align:right"><b class="price">${fmt(sp)} 🪙</b><small class="lbl">pro Pack · 75 %</small></div></div><div class="row between" style="margin-top:.8rem"><div class="qty"><button data-act="sellMinus">−</button><b>${S.sellQty}</b><button data-act="sellPlus">+</button></div><button class="go" data-act="sellSubmit">💰 Verkauf anfragen</button></div></div>` : ""}
+      <div class="product-grid">${shown.map((i,n)=>{const pack=Math.max(1,+i.packSize||1), price=Math.round((+i.price||0)*.75);return `<article class="product" style="--i:${n%14}"><div class="pa">${imgTag(i.id)}<span class="em">${esc(i.icon||"🧱")}</span></div><div class="pi"><small>${esc(i.category||"Block")}</small><h3>${esc(i.name)}</h3><b class="price">${fmt(price)} 🪙</b><small>${pack>1?pack+"er-Pack":"Stück"} · 75 % vom Shoppreis</small><button class="go wide" data-act="sellSelect" data-id="${esc(i.id)}">Auswählen</button></div></article>`}).join("")}</div>${items.length>shown.length?`<p style="text-align:center;margin-top:14px"><button data-act="sellMore">Mehr anzeigen (${fmt(items.length-shown.length)} weitere)</button></p>`:""}`;
   },
   shop() {
     if (outOfGame()) return `<div class="card"><h3>☠ Du bist ausgeschieden</h3><p class="lbl">Der Shop ist für dich in der Endphase gesperrt. News und Konto bleiben verfügbar.</p></div>`;
@@ -876,10 +920,10 @@ function render(force) {
   if (S.me.status !== "active") return ($("#root").innerHTML = `<div class="login card"><h1><img src="${GRASS}" alt="">RealmOS</h1><p>${S.me.status === "rejected" ? "Anmeldung abgelehnt." : `Hallo <b>${esc(S.me.gamertag)}</b>! Warte auf Freischaltung.`}</p><button data-act="logout">Abmelden</button></div>`);
   if (S.me.role === "player" && S.me.eliminated === true) return ($("#root").innerHTML = `<div class="login card"><h1>☠️ Du bist ausgeschieden</h1><p>Deine Teilnahme an diesem Event ist beendet.</p></div>`);
   if (!V[S.view] || (S.view === "admin" && !isStaff())) S.view = "home";
-  const dock = [["home", "⌂", "Home"], ["wallet", "💳", "Konto"], ["shop", "🧱", "Shop"], ["news", "📰", "News"], ["support", "🛟", "Support"], ...(isStaff() ? [["admin", "🛡️", "Admin"]] : []), ["settings", "⚙️", "Einstellungen"]];
+  const dock = [["home", "⌂", "Home"], ["wallet", "💳", "Konto"], ["shop", "🧱", "Shop"], ["sell", "💰", "Verkaufen"], ["news", "📰", "News"], ["support", "🛟", "Support"], ...(isStaff() ? [["admin", "🛡️", "Admin"]] : []), ["settings", "⚙️", "Einstellungen"]];
   const inApp = S.view !== "home", cart = S.view === "shop" && S.shopPage === "cart";
-  const title = cart ? "Warenkorb" : { wallet: "Konto", shop: "Shop", news: "Newsboard", support: "Support", bounty: "Kopfgeld", vote: "Abstimmung", punish: "Strafen", settings: "Einstellungen", admin: "Admin" }[S.view] || "App";
-  const key = [S.view, S.shopPage, S.adminMode, S.fullTab, S.walTab].join("|"), enter = key !== lastKey, sy = window.scrollY; lastKey = key;
+  const title = cart ? "Warenkorb" : { wallet: "Konto", shop: "Shop", sell: "Verkaufen", news: "Newsboard", support: "Support", bounty: "Kopfgeld", vote: "Abstimmung", punish: "Strafen", settings: "Einstellungen", admin: "Admin" }[S.view] || "App";
+  const key = [S.view, S.shopPage, S.adminMode, S.fullTab, S.walTab, S.sellCat, S.sellItem, S.sellQty].join("|"), enter = key !== lastKey, sy = window.scrollY; lastKey = key;
   $("#root").innerHTML = `<div class="shell ${enter ? "enter" : ""}"><header class="statusbar"><button class="osbrand" data-act="nav" data-v="home"><img src="${GRASS}" alt="">RealmOS</button><span id="timer" class="timer"></span><div class="who"><span class="online-dot"></span>${esc(S.me.gamertag)}</div></header>
     ${inApp ? `<div class="apphead"><button class="back" data-act="${cart ? "shopBack" : "nav"}" data-v="home" aria-label="Zurück">‹</button><h2>${title}</h2></div>` : ""}
     <main>${V[S.view]()}</main><nav class="dock">${dock.map(([v, ic, l]) => `<button data-act="nav" data-v="${v}" title="${l}" aria-label="${l}" class="${S.view === v ? "on" : ""}"><span>${ic}</span></button>`).join("")}</nav></div>`;
@@ -909,17 +953,35 @@ const ask = (t) => prompt(t)?.trim();
 const user = (id) => S.users.find((u) => u.id === id);
 const pun = async (u, type, reason) => { await addDoc(collection(db, "punishments"), { uid: u.id, gamertag: u.gamertag, type, reason, by: S.me.gamertag, active: true, createdAt: serverTimestamp() }); if (type === "jail" || type === "ban") newsAdd("punish", `${u.gamertag} wurde ${type === "jail" ? "in den Knast gesteckt" : "gebannt"}: ${reason}`).catch(() => {}); };
 const cartChanged = () => { S.bump = true; if (S.view === "shop" && S.shopPage === "browse" && $("#shopDyn")) shopRefresh(); else render(true); };
+async function submitSale() {
+  if (!S.sellItem) throw Error("Bitte zuerst einen Artikel auswählen");
+  if (outOfGame()) throw Error("Du bist ausgeschieden");
+  const qty = Math.max(1, Math.min(99, Math.floor(+S.sellQty || 1)));
+  const ref = await addDoc(collection(db, "requests"), { type: "sell", payload: { itemId: S.sellItem, qty }, uid: S.uid, status: "pending", createdAt: serverTimestamp() });
+  const p = (S.pop = { title: "Verkauf wird geprüft", start: Date.now(), duration: 60, phase: "wait", msg: "", un: [] });
+  p.un.push(onSnapshot(ref, (d) => {
+    const s = d.data(); if (S.pop !== p || !s) return;
+    if (s.status === "error") { p.phase = "error"; p.msg = s.result || "Verkauf fehlgeschlagen"; renderModal(); }
+    if (s.status === "done") { p.phase = "done"; p.msg = s.result || "Verkauf abgeschlossen"; renderModal(); S.sellItem = ""; S.sellQty = 1; }
+  }));
+  renderModal();
+}
 const ACT = {
   nav: (b) => { S.view = b.dataset.v; if (S.view === "shop") S.shopPage = "browse"; render(true); },
   shopCart: () => { S.shopPage = "cart"; render(true); },
   shopBack: () => { S.shopPage = "browse"; render(true); },
   shopMore: () => { S.shopLimit += 60; shopRefresh(); },
+  sellCat: (b) => { S.sellCat = b.dataset.cat; S.sellLimit = 60; render(true); },
+  sellMore: () => { S.sellLimit += 60; render(true); },
+  sellSelect: (b) => { S.sellItem = b.dataset.id; S.sellQty = 1; render(true); },
+  sellMinus: () => { S.sellQty = Math.max(1, (S.sellQty || 1) - 1); render(true); },
+  sellPlus: () => { S.sellQty = Math.min(99, (S.sellQty || 1) + 1); render(true); },
   mode: (b) => { S.mode = b.dataset.m; S.authMsg = ""; render(true); },
   logout: () => signOut(auth),
   adminMode: (b) => { S.adminMode = b.dataset.m; render(true); },
   copy: (b) => copy(b.dataset.t),
   copyAll: (b) => copy((S.orders.find((o) => o.id === b.dataset.id)?.commands ?? []).join("\n")),
-  done: (b) => updateDoc(doc(db, "orders", b.dataset.id), { status: "done", doneAt: serverTimestamp(), doneBy: S.me.gamertag }),
+  done: async (b) => { const o = S.orders.find((x) => x.id === b.dataset.id); if (o?.kind === "sell") await completeSale(o.id); else await updateDoc(doc(db, "orders", b.dataset.id), { status: "done", doneAt: serverTimestamp(), doneBy: S.me.gamertag }); },
   approve: (b) => approve(b.dataset.id).then(() => toast("Freigeschaltet", "ok")),
   reject: (b) => updateDoc(U(b.dataset.id), { status: "rejected" }),
   shopCat: (b) => { S.shopCat = b.dataset.cat; S.shopLimit = 60; render(true); },
@@ -950,6 +1012,7 @@ const ACT = {
   repDone: (b) => updateDoc(doc(db, "reports", b.dataset.id), { status: "done" }),
   shopDel: (b) => confirm("Artikel löschen?") && deleteDoc(doc(db, "shop_items", b.dataset.id)),
   exportShop: () => exportShopCSV(),
+  sellSubmit: () => submitSale(),
   newsDel: (b) => deleteDoc(doc(db, "news", b.dataset.id)),
   voteClose: () => updateDoc(doc(db, "events", "vote"), { open: false }),
   nextPhase: () => nextPlannedPhase(),
@@ -1038,6 +1101,7 @@ document.addEventListener("input", (e) => {
   if (e.target.id === "pq") { S.q = e.target.value; $("#plist").innerHTML = playerList(); }
   if (e.target.id === "admQ") { S.admQ = e.target.value; $("#admList").innerHTML = admShopList(); }
   if (e.target.id === "shopSearch") { S.shopQ = e.target.value; S.shopLimit = 60; clearTimeout(window.__sq); window.__sq = setTimeout(shopRefresh, 160); }
+  if (e.target.id === "sellSearch") { S.sellQ = e.target.value; S.sellLimit = 60; clearTimeout(window.__ssq); window.__ssq = setTimeout(() => render(true), 160); }
 });
 
 render(true);
