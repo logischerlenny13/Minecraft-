@@ -433,7 +433,7 @@ onAuthStateChanged(auth, (u) => {
     render(true);
   });
 });
-function stop() { unsubs.forEach((f) => f()); unsubs = []; started = false; teamUn?.(); teamUn = null; teamSeen = undefined; }
+function stop() { unsubs.forEach((f) => f()); unsubs = []; started = false; teamUn?.(); teamUn = null; teamSeen = undefined; queue.length = 0; busy = false; }
 
 function listen() {
   const on = (ref, fn) => unsubs.push(onSnapshot(ref, (s) => { fn(s); render(); }, (e) => console.warn(e.code)));
@@ -463,7 +463,12 @@ function listen() {
       firstOrders = false;
     });
   }
-  if (isStaff()) on(query(col("requests"), where("status", "==", "pending")), (s) => { for (const d of s.docs) if (!queue.some((x) => x.id === d.id)) queue.push(d); drain(); });
+  if (isStaff()) on(query(col("requests"), where("status", "==", "pending")), (s) => {
+    for (const d of s.docs) {
+      if (!queue.some((x) => x.id === d.id)) queue.push(d);
+    }
+    drain().catch((e) => console.warn("Anfrage-Verarbeitung:", e));
+  });
 }
 
 /* ================= Anfragen der Spieler → Verarbeitung im Admin-Browser ================= */
@@ -624,20 +629,31 @@ async function completeSale(orderId) {
   toast("Verkauf bestätigt und Coins gutgeschrieben", "ok");
 }
 async function drain() {
-  if (busy) return; busy = true;
-  while (queue.length) {
-    const d = queue.shift(), ref = d.ref;
-    try {
-      await runTransaction(db, async (t) => { const s = await t.get(ref); if (s.data().status !== "pending") throw Error("skip"); t.update(ref, { status: "processing" }); });
-    } catch { continue; }
-    try {
-      const r = d.data(), ru = (await getDoc(U(r.uid))).data();
-      if (!ru || ru.status !== "active" || !H[r.type]) throw Error("Ungültige Anfrage");
-      const res = await H[r.type]({ ...r, role: ru.role, gamertag: ru.gamertag });
-      await updateDoc(ref, { status: "done", result: res.msg ?? res, orderId: res.orderId ?? null });
-    } catch (e) { await updateDoc(ref, { status: "error", result: e.message }).catch(() => {}); }
+  if (busy) return;
+  busy = true;
+  try {
+    while (queue.length) {
+      const d = queue.shift(), ref = d.ref;
+      try {
+        await runTransaction(db, async (t) => {
+          const s = await t.get(ref);
+          if (!s.exists() || s.data().status !== "pending") throw Error("skip");
+          t.update(ref, { status: "processing" });
+        });
+      } catch { continue; }
+      try {
+        const r = d.data(), ruSnap = await getDoc(U(r.uid)), ru = ruSnap.exists() ? ruSnap.data() : null;
+        if (!ru || ru.status !== "active" || !H[r.type]) throw Error("Ungültige Anfrage");
+        const res = await H[r.type]({ ...r, requestId: d.id, role: ru.role, gamertag: ru.gamertag });
+        await updateDoc(ref, { status: "done", result: res?.msg ?? res, orderId: res?.orderId ?? null });
+      } catch (e) {
+        await updateDoc(ref, { status: "error", result: e?.message || "Anfrage konnte nicht verarbeitet werden" }).catch(() => {});
+      }
+    }
+  } finally {
+    busy = false;
+    if (queue.length && isStaff()) queueMicrotask(() => drain().catch((e) => console.warn("Anfrage-Verarbeitung:", e)));
   }
-  busy = false;
 }
 
 /* ================= Admin-Funktionen ================= */
