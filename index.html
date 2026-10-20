@@ -477,7 +477,13 @@ function listen() {
       firstOrders = false;
     });
   }
-  if (isStaff()) on(query(col("requests"), where("status", "in", ["pending", "processing"])), (s) => { reqDocs = s.docs; pushReq(); });
+  if (isStaff()) on(col("requests"), (s) => {
+    reqDocs = s.docs.filter((d) => {
+      const x = d.data();
+      return x?.status === "pending" || x?.status === "processing";
+    });
+    pushReq();
+  });
 }
 
 /* ================= Anfragen der Spieler → Verarbeitung im Admin-Browser ================= */
@@ -553,13 +559,19 @@ const H = {
     return H.cart({ ...r, payload: { items: [{ itemId: r.payload.itemId, qty: r.payload.qty || 1 }], delivery: r.payload.delivery || "player", coords: r.payload.coords || "" } });
   },
   async cart(r) {
-    const me0 = (await getDoc(U(r.uid))).data(); if (S.state?.phase === "end" && r.role === "player" && me0?.eliminated) throw Error("Du bist ausgeschieden und kannst nicht mehr bestellen");
+    const me0 = (await getDoc(U(r.uid))).data();
+    const last = me0?.lastShopOrderAt?.toMillis ? me0.lastShopOrderAt.toMillis() : Number(me0?.lastShopOrderAt || 0);
+    if (Date.now() - last < 60000) throw Error("Du kannst nur einmal pro Minute eine Bestellung aufgeben."); if (S.state?.phase === "end" && r.role === "player" && me0?.eliminated) throw Error("Du bist ausgeschieden und kannst nicht mehr bestellen");
     const rows = (r.payload.items || []).map((x) => ({ itemId: String(x.itemId), qty: Math.max(1, Math.min(99, Math.floor(+x.qty || 1))) })).slice(0, 40);
     if (!rows.length) throw Error("Warenkorb ist leer");
     const oref = doc(db, "orders", r.id);
     const msg = await runTransaction(db, async (t) => {
       const us = await t.get(U(r.uid));
       if ((await t.get(oref)).exists()) return "Bestellung bereits angelegt";
+    const currentUser = await t.get(U(r.uid));
+    const last = currentUser.data()?.lastShopOrderAt?.toMillis ? currentUser.data().lastShopOrderAt.toMillis() : Number(currentUser.data()?.lastShopOrderAt || 0);
+    if (Date.now() - last < 60000) throw Error("Du kannst nur einmal pro Minute eine Bestellung aufgeben.");
+    t.update(U(r.uid), { lastShopOrderAt: serverTimestamp() });
       const refs = rows.map((x) => doc(db, "shop_items", x.itemId));
       const snaps = []; for (const ref of refs) snaps.push(await t.get(ref));
       let total = 0; const bought = [];
@@ -655,9 +667,11 @@ async function rejectSale(orderId) {
   });
   toast("Verkauf abgelehnt – keine Coins ausgezahlt", "ok");
 }async function drain() {
-  if (busy) return; busy = true;
-  while (queue.length) {
-    const d = queue.shift(), ref = d.ref;
+  if (busy) return;
+  busy = true;
+  try {
+    while (queue.length) {
+      const d = queue.shift(), ref = d.ref;
     try {
       await runTransaction(db, async (t) => { const s = await t.get(ref); if (!s.exists()) throw Error("skip"); const x = s.data(); const proc = x.procAt?.toMillis ? x.procAt.toMillis() : Number(x.procAt || 0); const stale = x.status === "processing" && ["sell", "cart", "buy"].includes(x.type) && Date.now() - proc > 30000; if (x.status !== "pending" && !stale) throw Error("skip"); t.update(ref, { status: "processing", procAt: serverTimestamp() }); });
     } catch { continue; }
@@ -667,8 +681,12 @@ async function rejectSale(orderId) {
       const res = await H[r.type]({ ...r, id: d.id, requestId: d.id, role: ru.role, gamertag: ru.gamertag });
       await updateDoc(ref, { status: "done", result: res.msg ?? res, orderId: res.orderId ?? null });
     } catch (e) { await updateDoc(ref, { status: "error", result: e.message }).catch(() => {}); }
+    }
   }
-  busy = false;
+  finally {
+    busy = false;
+    if (queue.length && isStaff()) queueMicrotask(() => drain().catch((e) => console.warn("Anfrage-Verarbeitung:", e)));
+  }
 }
 
 /* ================= Admin-Funktionen ================= */
@@ -1081,10 +1099,13 @@ const FORM = {
   async cartCheckout(f) {
     if (S.pop) return;
     if (outOfGame()) throw Error("Du bist ausgeschieden und kannst nicht mehr bestellen");
+    const last = Number(localStorage.getItem("realmos_last_shop_order") || 0);
+    if (Date.now() - last < 60000) throw Error("Du kannst nur einmal pro Minute eine Bestellung aufgeben.");
     const items = Object.entries(S.cart).filter(([, qty]) => qty > 0).map(([itemId, qty]) => ({ itemId, qty }));
     if (!items.length) throw Error("Warenkorb ist leer");
     if (f.delivery.value === "chest") xyz(f.coords.value);
     const ref = await addDoc(collection(db, "requests"), { type: "cart", payload: { items, delivery: f.delivery.value, coords: f.coords.value.trim() }, uid: S.uid, status: "pending", createdAt: serverTimestamp() });
+    localStorage.setItem("realmos_last_shop_order", String(Date.now()));
     trackOrder(ref, "Bestellung", "shop", () => { S.cart = {}; });
   },
   async shopItem(f) { await setDoc(doc(db, "shop_items", slug(f.name.value)), { name: f.name.value.trim(), price: +f.price.value, category: f.category.value.trim() || "Sonstiges", stock: f.stock.value === "" ? null : Math.max(0, Math.floor(+f.stock.value)), packSize: Math.max(1, Math.floor(+(f.packSize?.value || 1))), minecraftId: (f.minecraftId?.value || "").trim(), icon: (f.icon?.value || "🧱").trim(), commands: f.commands.value.split("\n").map((s) => s.trim()).filter(Boolean), active: true }); toast("Artikel gespeichert", "ok"); },
@@ -1148,15 +1169,14 @@ function renderModal() {
   const m = $("#modal"), p = S.pop;
   if (!p) { m.innerHTML = ""; m.dataset.k = ""; return; }
   const dur = p.duration, left = Math.max(0, dur - Math.floor((Date.now() - p.start) / 1000));
-  const slow = p.phase === "wait" && p.reqStatus === "pending" && Date.now() - p.start > 10000;
-  const key = [p.phase, p.msg, left === 0, slow, p.reqStatus].join("|");
+  const key = [p.phase, p.msg, left === 0, p.reqStatus].join("|");
   if (p.phase === "wait" && m.dataset.k === key) { const ring = m.querySelector(".ring"); if (ring) { ring.style.setProperty("--p", (left / dur) * 100); ring.querySelector("span").textContent = left; } return; }
   m.dataset.k = key;
   const sell = p.kind === "sell"; let body;
   if (p.phase === "done") body = `<svg class="check" viewBox="0 0 52 52"><circle cx="26" cy="26" r="24"/><path d="M14 27l8 8 16-17"/></svg><h2>${sell ? "Verkauf angenommen" : "Auftrag ausgeführt"}</h2><p class="lbl">${sell ? "Deine Coins wurden gutgeschrieben." : "Deine Bestellung wurde geliefert. Viel Spaß!"}</p><button class="go" data-act="popClose">Super</button>`;
   else if (p.phase === "rejected") body = `<div class="bad-x">✕</div><h2>${sell ? "Verkauf abgelehnt" : "Abgelehnt"}</h2><p class="lbl">${sell ? "Der Admin hat den Verkauf abgelehnt. Du bekommst keine Coins." : "Der Admin hat den Auftrag abgelehnt."}</p><button data-act="popClose">Schließen</button>`;
   else if (p.phase === "error") body = `<div class="bad-x">✕</div><h2>${sell ? "Verkauf" : "Kauf"} fehlgeschlagen</h2><p class="lbl">${esc(p.msg)}</p><button data-act="popClose">Schließen</button>`;
-  else body = `<div class="ring" style="--p:${(left / dur) * 100}"><span>${left}</span></div><h2>${sell ? "Verkauf wird geprüft" : "Auftrag wird ausgeführt"}</h2><p class="lbl">${p.reqStatus === "done" ? "Dein Auftrag ist beim Admin eingegangen und wartet auf Bestätigung." : slow ? "Noch kein Admin hat reagiert. Sobald einer online ist, geht es weiter." : left === 0 ? "Das dauert etwas länger. Dein Auftrag bleibt offen." : "Das kann einen Moment dauern."}</p>${left === 0 ? `<button data-act="popClose">Schließen</button>` : ""}`;
+  else body = `<div class="ring" style="--p:${(left / dur) * 100}"><span>${left}</span></div><h2>${sell ? "Verkauf wird geprüft" : "Auftrag wird ausgeführt"}</h2><p class="lbl">${p.reqStatus === "done" ? "Dein Auftrag ist beim Admin eingegangen und wartet auf Bestätigung." : left === 0 ? "Das dauert etwas länger. Dein Auftrag bleibt offen." : "Das kann einen Moment dauern."}</p>${left === 0 ? `<button data-act="popClose">Schließen</button>` : ""}`;
   m.innerHTML = `<div class="overlay"><div class="card sheet" role="dialog" aria-live="polite">${body}</div></div>`;
   if (p.phase === "done") burst();
 }
