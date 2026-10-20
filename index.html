@@ -489,8 +489,8 @@ const H = {
     const check = "/execute if entity @a[name=" + q(g) + ",hasitem={item=" + id + ",quantity=" + blocks + "..}] run clear @a[name=" + q(g) + "] " + id + " 0 " + blocks;
     const clear = "/clear " + q(g) + " " + id + " 0 " + blocks;
     const oref = doc(collection(db, "orders"));
-    await setDoc(oref, { kind: "sell", title: "Verkauf: " + qty + "× " + d.name, gamertag: g, uid: r.uid, itemId, itemName: d.name, minecraftId: id, packSize: pack, qty, blocks, unitSalePrice: price, total: price * qty, commands: [check, clear], note: "Prüfung: " + blocks + " Stück vorhanden. Der Prüf-Befehl entfernt die Ware nur bei ausreichender Menge.", status: "open", createdAt: serverTimestamp() });
-    return { msg: "Verkaufsauftrag für " + fmt(price * qty) + " Coins erstellt", orderId: oref.id };
+    await setDoc(oref, { kind: "sell", requestId: r.requestId || null, title: "Verkauf: " + qty + "× " + d.name, gamertag: g, uid: r.uid, itemId, itemName: d.name, minecraftId: id, packSize: pack, qty, blocks, unitSalePrice: price, total: price * qty, commands: [check, clear], note: "Prüfung: " + blocks + " Stück vorhanden. Der Prüf-Befehl entfernt die Ware nur bei ausreichender Menge.", status: "open", createdAt: serverTimestamp() });
+    return { msg: "Verkaufsauftrag wartet auf die Admin-Prüfung", orderId: oref.id, awaiting: true };
   },
   async transfer(r) {
     if (S.state?.phase === "end" && r.role === "player") { const me0 = (await getDoc(U(r.uid))).data(); if (me0?.eliminated) throw Error("Du bist ausgeschieden"); }
@@ -633,8 +633,8 @@ async function drain() {
     try {
       const r = d.data(), ru = (await getDoc(U(r.uid))).data();
       if (!ru || ru.status !== "active" || !H[r.type]) throw Error("Ungültige Anfrage");
-      const res = await H[r.type]({ ...r, role: ru.role, gamertag: ru.gamertag });
-      await updateDoc(ref, { status: "done", result: res.msg ?? res, orderId: res.orderId ?? null });
+      const res = await H[r.type]({ ...r, requestId: d.id, role: ru.role, gamertag: ru.gamertag });
+      await updateDoc(ref, { status: res.awaiting ? "awaiting" : "done", result: res.msg ?? res, orderId: res.orderId ?? null });
     } catch (e) { await updateDoc(ref, { status: "error", result: e.message }).catch(() => {}); }
   }
   busy = false;
@@ -708,7 +708,7 @@ const userOpts = (sel = "", skipMe = false) => (S.state?.phase === "end" ? parti
 function orderCard(o) {
   return `<div class="order"><div class="oh"><b>${esc(o.title)}</b><span class="lbl">${esc(o.gamertag ?? "")} · ${date(o.createdAt)}</span></div>${o.note ? `<div class="lbl">${esc(o.note)}</div>` : ""}
     ${(o.commands ?? []).map((c) => `<div class="cmd"><code>${esc(c)}</code><button class="sm" data-act="copy" data-t="${esc(c)}">Kopieren</button></div>`).join("")}
-    <div class="row"><button class="sm" data-act="copyAll" data-id="${o.id}">Alle kopieren</button>${o.kind === "sell" ? `<button class="go sm" data-act="done" data-id="${o.id}">✓ Prüfung erfolgreich</button>` : `<button class="go sm" data-act="done" data-id="${o.id}">Fertig</button>`}</div></div>`;
+    <div class="row"><button class="sm" data-act="copyAll" data-id="${o.id}">Alle kopieren</button>${o.kind === "sell" && o.status === "open" ? `<button class="go sm" data-act="done" data-id="${o.id}">✓ Annehmen</button><button class="sm bad" data-act="rejectSale" data-id="${o.id}">✕ Ablehnen</button>` : o.kind === "sell" ? `<span class="lbl">${o.status === "done" ? "✓ Angenommen" : "✕ Abgelehnt"}</span>` : `<button class="go sm" data-act="done" data-id="${o.id}">Fertig</button>`}</div></div>`;
 }
 const pendingBox = () => { const p = S.users.filter((u) => u.status === "pending"); return isAdmin() && p.length ? `<div class="card warn"><h3>Neue Anmeldungen (${p.length})</h3>${p.map((u) => `<div class="row" style="margin:.3rem 0"><b>${esc(u.gamertag)}</b><button class="sm go" data-act="approve" data-id="${u.id}">Freischalten</button><button class="sm bad" data-act="reject" data-id="${u.id}">Ablehnen</button></div>`).join("")}</div>` : ""; };
 const newsList = (items, del = false) => items.map((n, i) => `<div class="news-item" style="--i:${i + 2}"><span class="nic">${NI[n.type] || "📣"}</span><div><div>${esc(n.text)}</div><small>${ago(n.createdAt)}${n.by ? " · " + esc(n.by) : ""}</small></div>${del && isStaff() ? `<button class="sm" data-act="newsDel" data-id="${n.id}" aria-label="Löschen">✕</button>` : "<span></span>"}</div>`).join("");
@@ -962,7 +962,16 @@ async function submitSale() {
   p.un.push(onSnapshot(ref, (d) => {
     const s = d.data(); if (S.pop !== p || !s) return;
     if (s.status === "error") { p.phase = "error"; p.msg = s.result || "Verkauf fehlgeschlagen"; renderModal(); }
-    if (s.status === "done") { p.phase = "done"; p.msg = s.result || "Verkauf abgeschlossen"; renderModal(); S.sellItem = ""; S.sellQty = 1; }
+    if (s.status === "awaiting" && s.orderId && !p.watch) {
+      p.watch = true;
+      p.msg = "Dein Verkauf wurde an den Admin gesendet.";
+      p.un.push(onSnapshot(doc(db, "orders", s.orderId), (o) => {
+        const od = o.data(); if (S.pop !== p || !od) return;
+        if (od.status === "done") { p.phase = "done"; p.msg = "Verkauf angenommen – " + fmt(od.total || 0) + " Coins wurden gutgeschrieben."; renderModal(); S.sellItem = ""; S.sellQty = 1; }
+        if (od.status === "rejected") { p.phase = "error"; p.msg = od.rejectReason || "Der Verkauf wurde vom Admin abgelehnt."; renderModal(); }
+      }));
+      renderModal();
+    }
   }));
   renderModal();
 }
@@ -982,6 +991,7 @@ const ACT = {
   copy: (b) => copy(b.dataset.t),
   copyAll: (b) => copy((S.orders.find((o) => o.id === b.dataset.id)?.commands ?? []).join("\n")),
   done: async (b) => { const o = S.orders.find((x) => x.id === b.dataset.id); if (o?.kind === "sell") await completeSale(o.id); else await updateDoc(doc(db, "orders", b.dataset.id), { status: "done", doneAt: serverTimestamp(), doneBy: S.me.gamertag }); },
+  rejectSale: async (b) => { if (!isStaff()) throw Error("Nur Admin/Support darf Verkäufe ablehnen"); const o = S.orders.find((x) => x.id === b.dataset.id); if (!o || o.kind !== "sell" || o.status !== "open") throw Error("Dieser Verkauf ist nicht mehr offen"); const reason = (prompt("Grund für die Ablehnung (optional):") || "").trim(); await updateDoc(doc(db, "orders", o.id), { status: "rejected", rejectReason: reason || "Verkauf vom Admin abgelehnt", rejectedAt: serverTimestamp(), rejectedBy: S.me.gamertag }); if (o.requestId) await updateDoc(doc(db, "requests", o.requestId), { status: "rejected", result: reason || "Verkauf vom Admin abgelehnt" }).catch(() => {}); toast("Verkauf abgelehnt", "ok"); },
   approve: (b) => approve(b.dataset.id).then(() => toast("Freigeschaltet", "ok")),
   reject: (b) => updateDoc(U(b.dataset.id), { status: "rejected" }),
   shopCat: (b) => { S.shopCat = b.dataset.cat; S.shopLimit = 60; render(true); },
