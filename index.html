@@ -697,6 +697,29 @@ function shopDynHtml() {
     + (rows.length ? `<button class="floating-cart ${bump}" data-act="shopCart"><span>🛒 Warenkorb · ${count}</span><b>${fmt(total)} 🪙 →</b></button>` : "");
 }
 function shopRefresh() { const el = $("#shopDyn"); if (el) el.innerHTML = shopDynHtml(); else render(true); }
+function exportShopCSV() {
+  const items = Array.isArray(S.shop) ? S.shop : [];
+  if (!items.length) throw Error("Keine Shop-Artikel geladen.");
+  const keys = [...new Set(items.flatMap((it) => Object.keys(it || {})))];
+  const cleanCell = (v) => {
+    if (v == null) return "";
+    if (typeof v === "object") {
+      if (typeof v.toMillis === "function") return new Date(v.toMillis()).toISOString();
+      if (Array.isArray(v)) return JSON.stringify(v);
+      if (typeof v.seconds === "number" && typeof v.nanoseconds === "number") return new Date(v.seconds * 1000 + Math.floor(v.nanoseconds / 1e6)).toISOString();
+      try { return JSON.stringify(v); } catch { return String(v); }
+    }
+    return String(v);
+  };
+  const csv = [keys, ...items.map((it) => keys.map((k) => cleanCell(it[k])))].map((row) => row.map((v) => `"${String(v).replace(/"/g, '""')}"`).join(",")).join("\r\n");
+  const blob = new Blob(["\uFEFF", csv], { type: "text/csv;charset=utf-8" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = `realmos-shop-items-${items.length}.csv`;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+  toast(`${items.length} Artikel als CSV exportiert`, "ok");
+}
 function admShopList() {
   const ql = S.admQ.trim().toLowerCase().replace(/\s+/g, "_"), list = S.shop.filter((i) => !ql || String(i.name).toLowerCase().includes(S.admQ.trim().toLowerCase()) || String(i.id).includes(ql)).sort((a, b) => String(a.name).localeCompare(String(b.name)));
   return `<p class="lbl hint">${fmt(list.length)} Treffer${list.length > 30 ? " – zeige 30, Suche eingrenzen" : ""}</p>` + list.slice(0, 30).map((i) => `<div class="row between pad nowrap"><span style="min-width:0"><b>${esc(i.name)}</b><br><small class="lbl">${fmt(i.price)} 🪙 · ${(+i.packSize || 1)}er · Bestand ${i.stock == null ? "∞" : fmt(i.stock)}</small></span><span class="row nowrap"><button class="sm" data-act="shopEdit" data-id="${esc(i.id)}">Bearbeiten</button><button class="sm bad" data-act="shopDel" data-id="${esc(i.id)}">✕</button></span></div>`).join("");
@@ -811,7 +834,7 @@ const V = {
         <label for="sc">Kategorie</label><input id="sc" name="category"><label for="sk">Lagerbestand in Stück (leer = unbegrenzt)</label><input id="sk" name="stock" type="number" min="0">
         <label for="smc">Minecraft-ID (z. B. golden_apple)</label><input id="smc" name="minecraftId" placeholder="leer = nur eigene Befehle"><label for="sic">Icon (Emoji)</label><input id="sic" name="icon" placeholder="🧱">
         <label for="scm">Eigene Befehle (eine Zeile je Befehl, {player} wird ersetzt)</label><textarea id="scm" name="commands" placeholder="/give {player} golden_apple 2"></textarea><p><button class="go">Speichern</button></p></form>
-        <div class="card"><h3>Artikel verwalten (${fmt(S.shop.length)})</h3><input id="admQ" placeholder="Artikel suchen …" value="${esc(S.admQ)}" style="margin-bottom:.5rem"><div id="admList">${admShopList()}</div></div>` : ""}
+        <div class="card"><div class="row between"><h3 style="margin:0">Artikel verwalten (${fmt(S.shop.length)})</h3><button type="button" class="sm" data-act="exportShop">📥 CSV exportieren</button></div><p class="lbl hint">Exportiert alle aktuell geladenen Shop-Artikel mit ID, Name, Preis, Kategorie, Icon, Minecraft-ID, Befehlen usw.</p><input id="admQ" placeholder="Artikel suchen …" value="${esc(S.admQ)}" style="margin-bottom:.5rem"><div id="admList">${admShopList()}</div></div></div>` : ""}
       ${F("settings") ? `<form class="card" data-form="cfg"><h3>Einstellungen</h3>${cfgFields()}<p><button class="go">Speichern</button></p></form><div class="card warn"><h3>Event zurücksetzen</h3><p class="lbl">Behält Realm-Einstellungen und den gespeicherten Phasenplan. Löscht Event-Fortschritt und Teams.</p><button type="button" class="bad" data-act="resetEvent">Alles zurücksetzen</button></div>` : ""}</div>` : "";
     return `${tabs}${F("players") ? pendingBox() : ""}${adminOnly}<div class="cols">
       ${F("news") ? `<form class="card" data-form="newsPost"><h3>News veröffentlichen</h3><label for="nt">Text</label><input id="nt" name="text" maxlength="200" placeholder="z. B. Heute Abend um 20 Uhr Minigame!" required><p><button class="go">Posten</button></p></form>` : ""}
@@ -920,6 +943,7 @@ const ACT = {
   punEnd: async (b) => { const p = S.pun.find((x) => x.id === b.dataset.id); await updateDoc(doc(db, "punishments", p.id), { active: false }); if (p.type === "jail") order(`Knast beenden: ${p.gamertag}`, CMD.unjail(p.gamertag)); },
   repDone: (b) => updateDoc(doc(db, "reports", b.dataset.id), { status: "done" }),
   shopDel: (b) => confirm("Artikel löschen?") && deleteDoc(doc(db, "shop_items", b.dataset.id)),
+  exportShop: () => exportShopCSV(),
   newsDel: (b) => deleteDoc(doc(db, "news", b.dataset.id)),
   voteClose: () => updateDoc(doc(db, "events", "vote"), { open: false }),
   nextPhase: () => nextPlannedPhase(),
