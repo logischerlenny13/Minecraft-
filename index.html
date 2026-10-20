@@ -477,8 +477,11 @@ function listen() {
       firstOrders = false;
     });
   }
-  if (isStaff()) on(query(col("requests"), where("status", "in", ["pending", "processing"])), (s) => {
-    reqDocs = s.docs;
+  if (isStaff()) on(col("requests"), (s) => {
+    reqDocs = s.docs.filter((d) => {
+      const x = d.data();
+      return x?.status === "pending" || x?.status === "processing";
+    });
     pushReq();
   });
 }
