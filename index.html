@@ -201,6 +201,16 @@ code{flex:1;background:rgba(0,0,0,.45);color:#9ff0a0;padding:.35rem .6rem;border
 @media (max-width:560px){.shell{padding-left:10px;padding-right:10px}.tiles{grid-template-columns:repeat(4,minmax(0,1fr));gap:16px 4px}.tile .ic{width:58px;height:58px;border-radius:18px;font-size:1.6rem}.tile{font-size:.72rem}.tile .badge{right:calc(50% - 34px)}.product-grid{grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}.pa{height:88px}.pi{padding:9px}.cart-row{grid-template-columns:42px 1fr auto}.cart-row>b{grid-column:2/4}.shophead{grid-template-columns:1fr auto}.chip-bal{display:none}.dock{gap:2px}.dock button{width:44px}.dock button:hover{transform:none}}
 @media (prefers-reduced-motion:reduce){*,*::before,*::after{animation:none!important;transition:none!important}}
 </style>
+
+<style>
+.race-card{border:1px solid rgba(255,193,7,.28)}
+.race-row,.race-own{display:grid;grid-template-columns:minmax(110px,1fr) minmax(140px,3fr) auto;gap:12px;align-items:center;padding:10px 0}
+.race-bar{height:14px;border-radius:999px;background:rgba(120,145,175,.22);overflow:hidden;box-shadow:inset 0 0 0 1px rgba(255,255,255,.05)}
+.race-bar i{display:block;height:100%;border-radius:inherit;background:linear-gradient(90deg,#168cff,#20e36b);transition:width .45s ease}
+.race-row:first-of-type{padding:12px;border:1px solid #f0b90b;border-radius:12px;background:rgba(240,185,11,.09)}
+.race-row:first-of-type>b:before{content:"👑 ";}.race-own{margin:14px 0;padding:12px;background:rgba(0,0,0,.16);border-radius:12px}
+@media(max-width:700px){.race-row,.race-own{grid-template-columns:1fr auto}.race-bar{grid-column:1/-1;grid-row:2}.race-row strong,.race-own strong{grid-column:2;grid-row:1}}
+</style>
 </head>
 <body>
 <div id="bg"><i></i></div><div id="root"></div><div id="modal"></div><div id="toast" aria-live="polite"></div>
@@ -219,7 +229,9 @@ const GRASS = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAGAAAABgCAYAAADimHc
 
 /* ================= State & Helfer ================= */
 const CFG0 = { jail: "0 200 0", spawn: "0 100 0", minigame: "0 100 0", startCoins: 100, killReward: 25, bountyOnKill: 50 };
-const S = { tasks: [], myClaims: [], claims: [], fullTab: "", adminMode: "quick", eventPlan: [], walTab: "me", sendFrom: "me", openUser: "", q: "", admQ: "", shopQ: "", shopCat: "Alle", shopLimit: 60, cart: {}, shopPage: "browse", sellQ: "", sellCat: "Alle", sellLimit: 60, sellQty: 1, sellItem: "", bump: false, pop: null, teamTx: [], uid: null, me: null, view: "home", mode: "login", authMsg: "", victim: "", users: [], tx: [], teams: [], shop: [], pun: [], bounties: [], myOrders: [], orders: [], reports: [], support: [], mySupport: [], news: [], state: null, vote: null, ballots: [], cfg: {} };
+const S = { taskTab: "tasks", tasks: [], myClaims: [], claims: [], fullTab: "", adminMode: "quick", eventPlan: [], walTab: "me", sendFrom: "me", openUser: "", q: "", admQ: "", shopQ: "", shopCat: "Alle", shopLimit: 60, cart: {}, shopPage: "browse", sellQ: "", sellCat: "Alle", sellLimit: 60, sellQty: 1, sellItem: "", bump: false, pop: null, teamTx: [], uid: null, me: null, view: "home", mode: "login", authMsg: "", victim: "", users: [], tx: [], teams: [], shop: [], pun: [], bounties: [], myOrders: [], orders: [], reports: [], support: [], mySupport: [], news: [], state: null, vote: null, ballots: [], cfg: {} };
+const TASK_TEMPLATES = [{"id":1,"title":"Töte 1 Spieler","metric":"kills","goal":1,"reward":20,"mode":"auto","item":""},{"id":2,"title":"Töte 3 Spieler","metric":"kills","goal":3,"reward":60,"mode":"auto","item":""},{"id":3,"title":"Töte 5 Spieler","metric":"kills","goal":5,"reward":110,"mode":"auto","item":""},{"id":4,"title":"Töte 10 Spieler","metric":"kills","goal":10,"reward":250,"mode":"auto","item":""},{"id":5,"title":"Töte einen bestimmten Spieler","metric":"manual","goal":1,"reward":50,"mode":"manual","item":""},{"id":6,"title":"Erziele 2 Kills ohne dazwischen zu sterben","metric":"manual","goal":2,"reward":60,"mode":"manual","item":""},{"id":7,"title":"Erziele 3 Kills ohne dazwischen zu sterben","metric":"manual","goal":3,"reward":100,"mode":"manual","item":""},{"id":8,"title":"Sei der Erste mit 3 Kills","metric":"kills","goal":3,"reward":100,"mode":"race","item":""},{"id":9,"title":"Sei der Erste mit 5 Kills","metric":"kills","goal":5,"reward":180,"mode":"race","item":""},{"id":10,"title":"Erziele innerhalb einer Phase 3 Kills","metric":"kills","goal":3,"reward":90,"mode":"auto","item":""},{"id":11,"title":"Sammle ein Kopfgeld ein","metric":"bountyEarn","goal":1,"reward":75,"mode":"auto","item":""},{"id":12,"title":"Sammle 2 Kopfgelder ein","metric":"bountyEarn","goal":2,"reward":175,"mode":"auto","item":""},{"id":13,"title":"Verdiene 100 Coins durch Kopfgelder","metric":"bountyCoins","goal":100,"reward":150,"mode":"auto","item":""},{"id":14,"title":"Verdiene 250 Coins durch Kopfgelder","metric":"bountyCoins","goal":250,"reward":300,"mode":"auto","item":""},{"id":15,"title":"Sei der Erste, der 200 Kopfgeld-Coins verdient","metric":"bountyCoins","goal":200,"reward":300,"mode":"race","item":""},{"id":16,"title":"Setze ein Kopfgeld auf einen Spieler aus","metric":"bountySpend","goal":1,"reward":20,"mode":"auto","item":""},{"id":17,"title":"Setze insgesamt 200 Coins Kopfgeld aus","metric":"bountySpend","goal":200,"reward":60,"mode":"auto","item":""},{"id":18,"title":"Erreiche ein Guthaben von 250 Coins","metric":"balance","goal":250,"reward":40,"mode":"auto","item":""},{"id":19,"title":"Erreiche ein Guthaben von 500 Coins","metric":"balance","goal":500,"reward":100,"mode":"auto","item":""},{"id":20,"title":"Verdiene insgesamt 200 Coins","metric":"earned","goal":200,"reward":60,"mode":"auto","item":""},{"id":21,"title":"Verdiene insgesamt 500 Coins","metric":"earned","goal":500,"reward":150,"mode":"auto","item":""},{"id":22,"title":"Sei der Erste mit 500 Coins","metric":"balance","goal":500,"reward":200,"mode":"race","item":""},{"id":23,"title":"Überweise einem anderen Spieler Coins","metric":"transfer","goal":1,"reward":15,"mode":"auto","item":""},{"id":24,"title":"Überweise insgesamt 100 Coins","metric":"transfer","goal":100,"reward":30,"mode":"auto","item":""},{"id":25,"title":"Zahle Coins in dein Teamkonto ein","metric":"teamDeposit","goal":1,"reward":20,"mode":"auto","item":""},{"id":26,"title":"Gib 50 Coins im Shop aus","metric":"shopSpend","goal":50,"reward":20,"mode":"auto","item":""},{"id":27,"title":"Gib 100 Coins im Shop aus","metric":"shopSpend","goal":100,"reward":40,"mode":"auto","item":""},{"id":28,"title":"Gib 250 Coins im Shop aus","metric":"shopSpend","goal":250,"reward":100,"mode":"auto","item":""},{"id":29,"title":"Kaufe 3 verschiedene Artikel","metric":"shopOrders","goal":3,"reward":60,"mode":"auto","item":""},{"id":30,"title":"Gib als Erster 200 Coins im Shop aus","metric":"shopSpend","goal":200,"reward":150,"mode":"race","item":""},{"id":31,"title":"Verkaufe einen Gegenstand","metric":"sell","goal":1,"reward":20,"mode":"auto","item":""},{"id":32,"title":"Verdiene 100 Coins durch Verkäufe","metric":"sellCoins","goal":100,"reward":75,"mode":"auto","item":""},{"id":33,"title":"Besitze 1 Netherite-Barren","metric":"item","goal":1,"reward":100,"mode":"command","item":"netherite_ingot"},{"id":34,"title":"Besitze 5 Diamanten","metric":"item","goal":5,"reward":40,"mode":"command","item":"diamond"},{"id":35,"title":"Besitze 32 Eisenbarren","metric":"item","goal":32,"reward":35,"mode":"command","item":"iron_ingot"},{"id":36,"title":"Besitze 16 Goldbarren","metric":"item","goal":16,"reward":35,"mode":"command","item":"gold_ingot"},{"id":37,"title":"Besitze 1 Diamantblock","metric":"item","goal":1,"reward":75,"mode":"command","item":"diamond_block"},{"id":38,"title":"Besitze 1 Netherite-Schwert","metric":"item","goal":1,"reward":150,"mode":"command","item":"netherite_sword"},{"id":39,"title":"Besitze eine vollständige Diamantrüstung","metric":"manual","goal":1,"reward":175,"mode":"manual","item":""},{"id":40,"title":"Besitze 64 Brote","metric":"item","goal":64,"reward":25,"mode":"command","item":"bread"},{"id":41,"title":"Besitze 16 Enderperlen","metric":"item","goal":16,"reward":75,"mode":"command","item":"ender_pearl"},{"id":42,"title":"Besitze einen goldenen Apfel","metric":"item","goal":1,"reward":40,"mode":"command","item":"golden_apple"},{"id":43,"title":"Gib 5 Diamanten ab","metric":"itemGive","goal":5,"reward":75,"mode":"command","item":"diamond"},{"id":44,"title":"Gib 32 Eisenbarren ab","metric":"itemGive","goal":32,"reward":60,"mode":"command","item":"iron_ingot"},{"id":45,"title":"Gib einen Netherite-Barren ab","metric":"itemGive","goal":1,"reward":175,"mode":"command","item":"netherite_ingot"},{"id":46,"title":"Gewinne ein bestimmtes Minigame","metric":"manual","goal":1,"reward":150,"mode":"manual","item":""},{"id":47,"title":"Baue eine sichere Basis","metric":"manual","goal":1,"reward":100,"mode":"manual","item":""},{"id":48,"title":"Baue eine geheime Basis","metric":"manual","goal":1,"reward":125,"mode":"manual","item":""},{"id":49,"title":"Erreiche einen bestimmten Ort","metric":"manual","goal":1,"reward":75,"mode":"manual","item":""},{"id":50,"title":"Erfülle eine geheime Spezialaufgabe","metric":"manual","goal":1,"reward":200,"mode":"manual","item":""}];
+let taskAutoBusy = false;
 let teamSeen, teamUn, unsubs = [], started = false, dirty = false, firstOrders = true, busy = false, catalogSeedStarted = false, lastKey = "", enterTimer, listenRank;
 const C = () => ({ ...CFG0, ...S.cfg });
 
@@ -474,8 +486,8 @@ function listen() {
   on(doc(db, "events", "state"), (d) => (S.state = d.data() ?? null));
   on(doc(db, "events", "vote"), (d) => (S.vote = d.data() ?? null));
   on(col("events/vote/ballots"), (s) => (S.ballots = list(s)));
-  on(col("tasks"), (s) => (S.tasks = list(s)));
-  on(query(col("task_claims"), where("uid", "==", S.uid)), (s) => (S.myClaims = list(s)));
+  on(col("tasks"), (s) => { S.tasks = list(s); checkAutomaticTasks().catch(console.warn); });
+  on(query(col("task_claims"), where("uid", "==", S.uid)), (s) => { S.myClaims = list(s); checkAutomaticTasks().catch(console.warn); });
   if (isStaff()) {
     on(doc(db, "settings", "config"), (d) => (S.cfg = d.data() ?? {}));
     on(query(col("task_claims"), orderBy("createdAt", "desc"), limit(80)), (s) => (S.claims = list(s)));
@@ -800,6 +812,52 @@ function orderCard(o) {
 }const pendingBox = () => { const p = S.users.filter((u) => u.status === "pending"); return isAdmin() && p.length ? `<div class="card warn"><h3>Neue Anmeldungen (${p.length})</h3>${p.map((u) => `<div class="row" style="margin:.3rem 0"><b>${esc(u.gamertag)}</b><button class="sm go" data-act="approve" data-id="${u.id}">Freischalten</button><button class="sm bad" data-act="reject" data-id="${u.id}">Ablehnen</button></div>`).join("")}</div>` : ""; };
 const newsList = (items, del = false) => items.map((n, i) => `<div class="news-item" style="--i:${i + 2}"><span class="nic">${NI[n.type] || "📣"}</span><div><div>${esc(n.text)}</div><small>${ago(n.createdAt)}${n.by ? " · " + esc(n.by) : ""}</small></div>${del && isStaff() ? `<button class="sm" data-act="newsDel" data-id="${n.id}" aria-label="Löschen">✕</button>` : "<span></span>"}</div>`).join("");
 
+
+const taskTs = (x) => x?.toMillis?.() ?? (x?.seconds ? x.seconds * 1000 : Number(x || 0));
+function taskMetric(t, uid, claim) {
+  const u = S.users.find(x => x.id === uid) || (uid === S.uid ? S.me : null), start = taskTs(claim?.joinedAt || t.createdAt);
+  if (t.metric === "balance") return Math.max(0, +u?.balance || 0);
+  if (t.metric === "kills") return Math.max(0, (+u?.kills || 0) - (+claim?.baseKills || 0));
+  const tx = (uid === S.uid ? S.tx : []).filter(x => taskTs(x.ts) >= start);
+  if (t.metric === "earned") return tx.filter(x => +x.amount > 0 && x.type !== "task").reduce((n,x)=>n+(+x.amount||0),0);
+  if (t.metric === "shopSpend") return -tx.filter(x => x.type === "shop" && +x.amount < 0).reduce((n,x)=>n+(+x.amount||0),0);
+  if (t.metric === "sellCoins") return tx.filter(x => x.type === "sell" && +x.amount > 0).reduce((n,x)=>n+(+x.amount||0),0);
+  if (t.metric === "bountyCoins") return tx.filter(x => x.type === "bounty" && +x.amount > 0).reduce((n,x)=>n+(+x.amount||0),0);
+  if (t.metric === "bountySpend") return -tx.filter(x => x.type === "bounty" && +x.amount < 0).reduce((n,x)=>n+(+x.amount||0),0);
+  if (t.metric === "transfer") return -tx.filter(x => x.type === "transfer" && +x.amount < 0).reduce((n,x)=>n+(+x.amount||0),0);
+  if (t.metric === "teamDeposit") return -tx.filter(x => x.type === "transfer" && +x.amount < 0 && /Team-Konto/.test(x.reason||"")).reduce((n,x)=>n+(+x.amount||0),0);
+  if (t.metric === "bountyEarn") return tx.filter(x => x.type === "bounty" && +x.amount > 0).length;
+  if (t.metric === "shopOrders") return S.myOrders.filter(o => o.kind === "shop" && taskTs(o.createdAt) >= start).length;
+  return 0;
+}
+async function finishAutoTask(t, c) {
+  if (c.status !== "joined" && c.status !== "active") return;
+  await runTransaction(db, async tr => {
+    const cr=doc(db,"task_claims",c.id), cs=await tr.get(cr); if(!cs.exists() || !["joined","active"].includes(cs.data().status)) return;
+    const ur=U(c.uid), us=await tr.get(ur); if(!us.exists()) return;
+    if(t.mode==="race" && t.winnerUid) return;
+    const bal=+us.data().balance||0, reward=Math.max(0,+t.reward||0);
+    tr.update(ur,{balance:bal+reward}); addTx(tr,c.uid,reward,"Aufgabe: "+t.title,"task",bal+reward);
+    tr.update(cr,{status:"approved",paid:reward,doneAt:serverTimestamp(),doneBy:"Automatik"});
+    if(t.mode==="race") tr.update(doc(db,"tasks",t.id),{winnerUid:c.uid,winnerName:c.gamertag,active:false,finishedAt:serverTimestamp()});
+  });
+}
+async function checkAutomaticTasks() {
+  if(taskAutoBusy || !S.uid || !S.me) return; taskAutoBusy=true;
+  try {
+    for(const t of S.tasks.filter(x=>x.active!==false && x.metric && !["manual","item","itemGive"].includes(x.metric))) {
+      const c=S.myClaims.find(x=>x.taskId===t.id);
+      if(!c || !["joined","active"].includes(c.status)) continue;
+      if(taskMetric(t,S.uid,c) >= (+t.goal||1)) await finishAutoTask(t,c);
+    }
+  } finally { taskAutoBusy=false; }
+}
+function raceBoard(t) {
+  const cs=S.claims.filter(c=>c.taskId===t.id && ["joined","active","approved"].includes(c.status));
+  const rows=cs.map(c=>({c,v:c.uid===S.uid?taskMetric(t,c.uid,c):(+c.progress||0)})).sort((a,b)=>b.v-a.v);
+  return rows.length ? rows.map((x,i)=>{const p=Math.min(100,Math.round(x.v/(+t.goal||1)*100));return '<div class="race-row"><b>'+(i+1)+'. '+esc(x.c.gamertag)+'</b><div class="race-bar"><i style="width:'+p+'%"></i></div><strong>'+fmt(x.v)+' / '+fmt(t.goal)+'</strong></div>'}).join("") : '<p class="empty">Noch keine Teilnehmer.</p>';
+}
+
 async function approveClaim(id) {
   if (!isStaff()) throw Error("Keine Berechtigung");
   await runTransaction(db, async (t) => {
@@ -815,11 +873,12 @@ async function approveClaim(id) {
   toast("Bestätigt – Coins ausgezahlt", "ok");
 }
 function taskAdmin() {
-  const pend = S.claims.filter((c) => c.status === "pending"), list = S.tasks.slice().sort(byTime).reverse();
-  return `<div class="cols"><form class="card" data-form="taskCreate"><h3>Neue Aufgabe</h3><label for="tt">Titel</label><input id="tt" name="title" maxlength="80" required><label for="ttx">Beschreibung / Prüfung</label><textarea id="ttx" name="text" maxlength="400" placeholder="Was muss gemacht werden?"></textarea>
-    <div class="cols"><div><label for="tr">Belohnung (Coins)</label><input id="tr" name="reward" type="number" min="0" value="50" required></div><div><label for="tas">Für</label><select id="tas" name="assignee"><option value="all">Alle Spieler</option>${active().filter((u) => u.role === "player").map((u) => `<option value="${u.id}">${esc(u.gamertag)}</option>`).join("")}</select></div></div><p><button class="go">Aufgabe erstellen</button></p></form>
-    <div class="card"><h3>Zu prüfen (${pend.length})</h3>${pend.length ? pend.map((c) => `<div class="order"><div class="oh"><b>${esc(c.taskTitle)}</b><span class="lbl">${esc(c.gamertag)} · ${date(c.createdAt)}</span></div><div class="lbl">Belohnung: <b class="gold">${fmt(c.reward)} 🪙</b></div><div class="row"><button class="go sm" data-act="claimOk" data-id="${c.id}">✓ Bestätigen</button><button class="bad sm" data-act="claimNo" data-id="${c.id}">✕ Ablehnen</button></div></div>`).join("") : '<p class="empty">Nichts zu prüfen.</p>'}</div></div>
-    <div class="card"><h3>Aufgaben (${list.length})</h3>${list.length ? list.map((t) => `<div class="row between pad nowrap"><span style="min-width:0"><b>${esc(t.title)}</b><br><small class="lbl">${fmt(t.reward)} 🪙 · ${t.assignee === "all" ? "alle Spieler" : esc(uname(t.assignee))} · ${S.claims.filter((c) => c.taskId === t.id && c.status === "approved").length}× bestätigt</small></span><button class="sm bad" data-act="taskDel" data-id="${t.id}">✕</button></div>`).join("") : '<p class="empty">Noch keine Aufgaben.</p>'}</div>`;
+  const pend=S.claims.filter(c=>c.status==="pending"), list=S.tasks.slice().sort(byTime).reverse();
+  const tpl=TASK_TEMPLATES.map(t=>'<option value="'+t.id+'">'+t.id+'. '+esc(t.title)+' · '+t.reward+' 🪙</option>').join("");
+  return '<div class="card"><h3>📚 50 Auftragsvorlagen</h3><form data-form="taskTemplate"><label>Vorlage</label><select name="template">'+tpl+'</select><div class="cols"><div><label>Für</label><select name="assignee"><option value="all">Alle Spieler</option><option value="race">🏁 Rennen – Spieler treten selbst bei</option>'+active().filter(u=>u.role==="player").map(u=>'<option value="'+u.id+'">'+esc(u.gamertag)+'</option>').join("")+'</select></div><div><label>Belohnung überschreiben (optional)</label><input name="reward" type="number" min="0" placeholder="Standardwert"></div></div><button class="go">Auftrag aktivieren</button></form></div>'+
+  '<div class="cols"><form class="card" data-form="taskCreate"><h3>Eigene manuelle Aufgabe</h3><label>Titel</label><input name="title" maxlength="80" required><label>Beschreibung / Prüfung</label><textarea name="text" maxlength="400"></textarea><div class="cols"><div><label>Belohnung</label><input name="reward" type="number" min="0" value="50" required></div><div><label>Für</label><select name="assignee"><option value="all">Alle Spieler</option>'+active().filter(u=>u.role==="player").map(u=>'<option value="'+u.id+'">'+esc(u.gamertag)+'</option>').join("")+'</select></div></div><button class="go">Aufgabe erstellen</button></form>'+
+  '<div class="card"><h3>Zu prüfen ('+pend.length+')</h3>'+(pend.length?pend.map(c=>'<div class="order"><b>'+esc(c.taskTitle)+'</b><div class="lbl">'+esc(c.gamertag)+' · +'+fmt(c.reward)+' 🪙</div><button class="go sm" data-act="claimOk" data-id="'+c.id+'">✓ Bestätigen</button> <button class="bad sm" data-act="claimNo" data-id="'+c.id+'">✕ Ablehnen</button></div>').join(""):'<p class="empty">Nichts zu prüfen.</p>')+'</div></div>'+
+  '<div class="card"><h3>Aktive & bisherige Aufträge ('+list.length+')</h3>'+list.map(t=>'<div class="row between pad"><span><b>'+esc(t.title)+'</b><br><small class="lbl">'+fmt(t.reward)+' 🪙 · '+(t.mode==="race"?"🏁 Rennen":t.mode==="auto"?"⚡ automatisch":t.mode==="command"?"⌨ Minecraft-Prüfung":"👤 manuell")+(t.winnerName?" · 🏆 "+esc(t.winnerName):"")+'</small></span><button class="sm bad" data-act="taskDel" data-id="'+t.id+'">✕</button></div>').join("")+'</div>';
 }
 function shopFiltered() {
   const raw = S.shopQ.trim().toLowerCase(), us = raw.replace(/\s+/g, "_"), ci = (c) => { const k = CAT_ORDER.indexOf(c); return k < 0 ? 99 : k; };
@@ -948,11 +1007,11 @@ const V = {
   },
   tasks() {
     if (outOfGame()) return '<div class="card"><h3>☠ Du bist ausgeschieden</h3></div>';
-    const list = S.tasks.filter((t) => t.active !== false && (t.assignee === "all" || t.assignee === S.uid)).sort(byTime).reverse();
-    return `<div class="pagehead"><p>Erledige Aufgaben, melde sie und kassiere Coins, sobald ein Admin sie bestätigt.</p></div>` + (list.length ? `<div class="cols">${list.map((t) => {
-      const c = S.myClaims.find((x) => x.taskId === t.id), st = !c ? "" : c.status === "approved" ? '<span class="tag g">✓ erledigt</span>' : c.status === "pending" ? '<span class="tag y">wird geprüft …</span>' : '<span class="tag r">✕ abgelehnt</span>';
-      return `<div class="card"><div class="row between"><h3 style="margin:0">${esc(t.title)}</h3><b class="price">+${fmt(t.reward)} 🪙</b></div><p class="lbl">${esc(t.text || "")}</p><div class="row between"><span class="tag">${t.assignee === "all" ? "Für alle" : "Nur für dich"}</span>${st}</div>${!c || c.status === "rejected" ? `<button class="go wide" data-act="taskClaim" data-id="${t.id}">✓ Als erledigt melden</button>` : ""}</div>`;
-    }).join("")}</div>` : '<div class="card empty">Gerade keine Aufgaben.</div>');
+    const normal=S.tasks.filter(t=>t.active!==false && t.mode!=="race" && (t.assignee==="all"||t.assignee===S.uid)).sort(byTime).reverse();
+    const races=S.tasks.filter(t=>t.mode==="race" && (t.active!==false || t.winnerUid)).sort(byTime).reverse();
+    const tabs='<div class="seg"><button class="'+(S.taskTab==="tasks"?"on":"")+'" data-act="taskTab" data-t="tasks">📋 Aufträge</button><button class="'+(S.taskTab==="races"?"on":"")+'" data-act="taskTab" data-t="races">🏁 Rennen</button></div>';
+    if(S.taskTab==="races") return tabs+(races.length?races.map(t=>{const c=S.myClaims.find(x=>x.taskId===t.id), joined=!!c, v=joined?taskMetric(t,S.uid,c):0, p=Math.min(100,Math.round(v/(+t.goal||1)*100)); return '<div class="card race-card"><div class="row between"><span><span class="tag y">RENNEN</span><h2>'+esc(t.title)+'</h2></span><b class="price">+'+fmt(t.reward)+' 🪙</b></div><p class="lbl">Wer das Ziel zuerst erreicht, gewinnt. '+(t.metric==="balance"?"Dein aktueller Kontostand zählt mit.":"Gezählt wird ab deinem Beitritt.")+'</p><div class="race-own"><b>Dein Fortschritt</b><div class="race-bar"><i style="width:'+p+'%"></i></div><strong>'+fmt(v)+' / '+fmt(t.goal)+'</strong></div><h3>Rangliste</h3>'+raceBoard(t)+(t.winnerName?'<div class="card ok">🏆 Gewinner: <b>'+esc(t.winnerName)+'</b></div>':!joined?'<button class="go wide" data-act="raceJoin" data-id="'+t.id+'">🏁 Rennen mitmachen</button>':'<span class="tag g">✓ Du nimmst teil</span>')+'</div>'}).join(""):'<div class="card empty">Gerade kein Rennen.</div>');
+    return tabs+(normal.length?'<div class="cols">'+normal.map(t=>{const cl=S.myClaims.find(x=>x.taskId===t.id), auto=t.mode==="auto", command=t.mode==="command", v=cl?taskMetric(t,S.uid,cl):0, p=Math.min(100,Math.round(v/(+t.goal||1)*100)); return '<div class="card"><div class="row between"><h3>'+esc(t.title)+'</h3><b class="price">+'+fmt(t.reward)+' 🪙</b></div><p class="lbl">'+esc(t.text||"")+'</p>'+(auto?'<div class="race-bar"><i style="width:'+p+'%"></i></div><small>'+fmt(v)+' / '+fmt(t.goal)+' · automatisch</small>':command?'<span class="tag y">⌨ Minecraft-Prüfung durch Admin</span>':'<span class="tag">👤 manuelle Prüfung</span>')+(cl?.status==="approved"?'<p><span class="tag g">✓ erledigt</span></p>':auto&&!cl?'<button class="go wide" data-act="taskStart" data-id="'+t.id+'">Auftrag starten</button>':!auto&&(!cl||cl.status==="rejected")?'<button class="go wide" data-act="taskClaim" data-id="'+t.id+'">✓ Als erledigt melden</button>':'')+'</div>'}).join("")+'</div>':'<div class="card empty">Gerade keine Aufgaben.</div>');
   },
   punish() {
     const L = { warn: ["Verwarnung", "y"], jail: ["Knast", "r"], ban: ["Bann", "r"] };
@@ -1141,6 +1200,9 @@ const ACT = {
     if (v?.extend) { const cur = S.ballots.filter((b) => b.round === v.round), y = cur.filter((b) => b.option === "ja").length, n = cur.filter((b) => b.option === "nein").length; if (y > n) await extendPhase(v.extend); else await newsAdd("info", `Abstimmung beendet: Phase wird nicht verlängert (Ja ${y} · Nein ${n})`); }
   },
   extend: (b) => extendPhase(+b.dataset.m),
+  taskTab: (b) => { S.taskTab=b.dataset.t; render(true); },
+  taskStart: async (b) => { const t=S.tasks.find(x=>x.id===b.dataset.id); if(!t)return; await setDoc(doc(db,"task_claims",t.id+"_"+S.uid),{taskId:t.id,taskTitle:t.title,reward:+t.reward||0,uid:S.uid,gamertag:S.me.gamertag,status:"joined",joinedAt:serverTimestamp(),baseKills:+S.me.kills||0,progress:0}); toast("Auftrag gestartet","ok"); },
+  raceJoin: async (b) => { const t=S.tasks.find(x=>x.id===b.dataset.id); if(!t||t.mode!=="race")return; await setDoc(doc(db,"task_claims",t.id+"_"+S.uid),{taskId:t.id,taskTitle:t.title,reward:+t.reward||0,uid:S.uid,gamertag:S.me.gamertag,status:"joined",joinedAt:serverTimestamp(),baseKills:+S.me.kills||0,progress:t.metric==="balance"?+S.me.balance||0:0}); toast("Du nimmst am Rennen teil!","ok"); },
   taskClaim: async (b) => { const t = S.tasks.find((x) => x.id === b.dataset.id); if (!t) return; if (outOfGame()) throw Error("Du bist ausgeschieden"); await setDoc(doc(db, "task_claims", t.id + "_" + S.uid), { taskId: t.id, taskTitle: t.title, reward: +t.reward || 0, uid: S.uid, gamertag: S.me.gamertag, status: "pending", createdAt: serverTimestamp() }); toast("Aufgabe gemeldet – ein Admin prüft sie", "ok"); },
   claimOk: async (b) => { b.disabled = true; try { await approveClaim(b.dataset.id); } catch (e) { b.disabled = false; throw e; } },
   claimNo: (b) => updateDoc(doc(db, "task_claims", b.dataset.id), { status: "rejected", doneBy: S.me.gamertag, doneAt: serverTimestamp() }).then(() => toast("Abgelehnt", "ok")),
@@ -1203,6 +1265,15 @@ const FORM = {
     const min = Math.floor(+f.min.value); if (!(min > 0)) throw Error("Minuten größer als 0 angeben");
     await setDoc(doc(db, "events", "vote"), { open: true, round: (S.vote?.round ?? 0) + 1, title: `Phase um ${min} Min verlängern?`, extend: min, options: { ja: `Ja, +${min} Min`, nein: "Nein" } });
     newsAdd("info", `Abstimmung: Phase um ${min} Min verlängern? Jetzt im Menü „Abstimmung“ abstimmen!`).catch(() => {}); toast("Abstimmung gestartet", "ok");
+  },
+  async taskTemplate(f) {
+    if(!isStaff()) throw Error("Keine Berechtigung");
+    const base=TASK_TEMPLATES.find(x=>x.id===+f.template.value); if(!base) throw Error("Vorlage nicht gefunden");
+    const as=f.assignee.value, race=as==="race"||base.mode==="race", reward=f.reward.value===""?base.reward:Math.max(0,Math.floor(+f.reward.value||0));
+    const mode=race?"race":base.mode, assignee=race?"race":as;
+    await addDoc(collection(db,"tasks"),{...base,reward,mode,assignee,active:true,by:S.me.gamertag,createdAt:serverTimestamp()});
+    newsAdd("info",(race?"Neues Rennen: ":"Neuer Auftrag: ")+base.title+" (+"+fmt(reward)+" Coins)").catch(()=>{});
+    toast(race?"Rennen aktiviert":"Auftrag aktiviert","ok");
   },
   async taskCreate(f) {
     if (!isStaff()) throw Error("Keine Berechtigung");
