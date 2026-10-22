@@ -69,7 +69,7 @@ table{width:100%;border-collapse:collapse}th,td{text-align:left;padding:.45rem .
 .dock button.on::after{content:"";position:absolute;bottom:3px;left:50%;width:4px;height:4px;margin-left:-2px;border-radius:50%;background:var(--green)}
 
 /* Home */
-.hello{padding:5vh 4px 22px}
+.hello{position:relative;padding:5vh 4px 22px}
 .hello small{color:var(--mute);letter-spacing:.06em}
 .hello h1{font-size:clamp(2.1rem,6.5vw,3.8rem);letter-spacing:-.045em;margin:.05em 0 .3em;overflow-wrap:anywhere}
 .chips-row{display:flex;gap:8px;flex-wrap:wrap}
@@ -188,6 +188,15 @@ code{flex:1;background:rgba(0,0,0,.45);color:#9ff0a0;padding:.35rem .6rem;border
 .enter .dock{animation:dockin .6s .1s var(--ease) both}
 .enter .statusbar{animation:fade .6s both}
 
+.pclock{position:absolute;top:0;right:4px;min-width:220px;padding:.7rem 1rem;border-radius:20px;background:var(--glass);border:1px solid var(--line);-webkit-backdrop-filter:blur(18px);backdrop-filter:blur(18px);text-align:right;animation:rise .6s var(--ease) both}
+.pclock:empty{display:none}
+.pclock small{display:block;color:var(--mute);letter-spacing:.08em;text-transform:uppercase;font-size:.7rem}
+.pclock b{display:block;font-size:2.2rem;font-variant-numeric:tabular-nums;color:var(--gold);letter-spacing:-.02em;line-height:1.1}
+.pclock em{display:block;font-style:normal;color:var(--mute);font-size:.8rem}
+.pclock .bar{margin:.35rem 0 .3rem;height:6px}
+.pclock.low b{color:var(--red);animation:pulseT 1s infinite}
+@keyframes pulseT{50%{opacity:.5}}
+@media (max-width:900px){.pclock{position:static;margin:0 0 14px;text-align:left;width:100%}.pclock b{font-size:2rem}}
 @media (max-width:860px){.qgrid,.homegrid,.checkout-layout{grid-template-columns:1fr}.checkout{position:static}}
 @media (max-width:560px){.shell{padding-left:10px;padding-right:10px}.tiles{grid-template-columns:repeat(4,minmax(0,1fr));gap:16px 4px}.tile .ic{width:58px;height:58px;border-radius:18px;font-size:1.6rem}.tile{font-size:.72rem}.tile .badge{right:calc(50% - 34px)}.product-grid{grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}.pa{height:88px}.pi{padding:9px}.cart-row{grid-template-columns:42px 1fr auto}.cart-row>b{grid-column:2/4}.shophead{grid-template-columns:1fr auto}.chip-bal{display:none}.dock{gap:2px}.dock button{width:44px}.dock button:hover{transform:none}}
 @media (prefers-reduced-motion:reduce){*,*::before,*::after{animation:none!important;transition:none!important}}
@@ -210,7 +219,7 @@ const GRASS = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAGAAAABgCAYAAADimHc
 
 /* ================= State & Helfer ================= */
 const CFG0 = { jail: "0 200 0", spawn: "0 100 0", minigame: "0 100 0", startCoins: 100, killReward: 25, bountyOnKill: 50 };
-const S = { fullTab: "", adminMode: "quick", eventPlan: [], walTab: "me", sendFrom: "me", openUser: "", q: "", admQ: "", shopQ: "", shopCat: "Alle", shopLimit: 60, cart: {}, shopPage: "browse", sellQ: "", sellCat: "Alle", sellLimit: 60, sellQty: 1, sellItem: "", bump: false, pop: null, teamTx: [], uid: null, me: null, view: "home", mode: "login", authMsg: "", victim: "", users: [], tx: [], teams: [], shop: [], pun: [], bounties: [], myOrders: [], orders: [], reports: [], support: [], mySupport: [], news: [], state: null, vote: null, ballots: [], cfg: {} };
+const S = { tasks: [], myClaims: [], claims: [], fullTab: "", adminMode: "quick", eventPlan: [], walTab: "me", sendFrom: "me", openUser: "", q: "", admQ: "", shopQ: "", shopCat: "Alle", shopLimit: 60, cart: {}, shopPage: "browse", sellQ: "", sellCat: "Alle", sellLimit: 60, sellQty: 1, sellItem: "", bump: false, pop: null, teamTx: [], uid: null, me: null, view: "home", mode: "login", authMsg: "", victim: "", users: [], tx: [], teams: [], shop: [], pun: [], bounties: [], myOrders: [], orders: [], reports: [], support: [], mySupport: [], news: [], state: null, vote: null, ballots: [], cfg: {} };
 let teamSeen, teamUn, unsubs = [], started = false, dirty = false, firstOrders = true, busy = false, catalogSeedStarted = false, lastKey = "", enterTimer, listenRank;
 const C = () => ({ ...CFG0, ...S.cfg });
 
@@ -465,8 +474,11 @@ function listen() {
   on(doc(db, "events", "state"), (d) => (S.state = d.data() ?? null));
   on(doc(db, "events", "vote"), (d) => (S.vote = d.data() ?? null));
   on(col("events/vote/ballots"), (s) => (S.ballots = list(s)));
+  on(col("tasks"), (s) => (S.tasks = list(s)));
+  on(query(col("task_claims"), where("uid", "==", S.uid)), (s) => (S.myClaims = list(s)));
   if (isStaff()) {
     on(doc(db, "settings", "config"), (d) => (S.cfg = d.data() ?? {}));
+    on(query(col("task_claims"), orderBy("createdAt", "desc"), limit(80)), (s) => (S.claims = list(s)));
     on(query(col("reports"), orderBy("createdAt", "desc"), limit(40)), (s) => (S.reports = list(s)));
     on(query(col("support_tickets"), orderBy("createdAt", "desc"), limit(60)), (s) => (S.support = list(s)));
     on(col("orders"), (s) => {
@@ -704,9 +716,37 @@ async function openMinigameVote() {
   await setDoc(doc(db, "events", "vote"), { open: true, round: (S.vote?.round ?? 0) + 1, options });
   newsAdd("info", `Minigame-Abstimmung gestartet: ${Object.values(options).join(" · ")}`).catch(() => {});
 }
-async function setPhase(phase, min, next) {
+function planNext(phase, idx) {
+  const plan = Array.isArray(C().phasePlan) ? C().phasePlan : [];
+  const i = Number.isInteger(idx) ? idx : plan.findIndex((x) => x.phase === phase), n = plan[i < 0 ? 0 : i + 1];
+  return n && PH[n.phase] ? PH[n.phase].label : null;
+}
+async function extendPhase(min) {
+  min = Math.round(+min); if (!min) throw Error("Bitte Minuten angeben (nicht 0)");
+  if (!isStaff()) throw Error("Keine Berechtigung");
+  const ref = doc(db, "events", "state");
+  const label = await runTransaction(db, async (t) => {
+    const sn = await t.get(ref); if (!sn.exists() || !sn.data().phase) throw Error("Es läuft gerade keine Phase");
+    const d = sn.data(), now = Date.now(), cur = d.endsAt?.toMillis ? d.endsAt.toMillis() : null;
+    const base = cur === null ? now : min > 0 ? Math.max(cur, now) : cur, end = base + min * 60000;
+    if (end <= now + 1000) throw Error("Die Restzeit würde negativ");
+    t.update(ref, { endsAt: Timestamp.fromMillis(end), durMs: Math.max(60000, (d.durMs || 0) + min * 60000) });
+    return d.label;
+  });
+  newsAdd("phase", `Phase „${label}“ wurde um ${Math.abs(min)} Min ${min > 0 ? "verlängert" : "verkürzt"}`).catch(() => {});
+  toast(`Timer ${min > 0 ? "+" : "−"}${Math.abs(min)} Min`, "ok");
+}
+async function autoAdvance(ms) {
+  const s = S.state, viaNext = s?.next && PH[s.next];
+  if (!s || !(viaNext || planNext(s.phase, s.planIdx))) return;
+  const ref = doc(db, "events", "state");
+  const ok = await runTransaction(db, async (t) => { const d = await t.get(ref); if (!d.exists() || d.data().endsAt?.toMillis?.() !== ms) return false; t.update(ref, { endsAt: null }); return true; });
+  if (!ok) return;
+  if (viaNext) await setPhase(s.next, 0, null); else await nextPlannedPhase();
+}
+async function setPhase(phase, min, next, idx) {
   const ph = PH[phase]; if (!ph) throw Error("Unbekannte Phase");
-  const data = { phase, label: ph.label, endsAt: min ? Timestamp.fromMillis(Date.now() + min * 60000) : null, next: next || null };
+  const data = { phase, label: ph.label, endsAt: min ? Timestamp.fromMillis(Date.now() + min * 60000) : null, durMs: min ? min * 60000 : null, planIdx: Number.isInteger(idx) ? idx : null, nextLabel: planNext(phase, idx), next: next || null };
   if (phase === "end") data.endgame = true;
   await setDoc(doc(db, "events", "state"), data);
   await order(`Phase: ${ph.label}`, ph.cmds());
@@ -724,9 +764,9 @@ async function setPhase(phase, min, next) {
 async function nextPlannedPhase() {
   const plan = Array.isArray(C().phasePlan) ? C().phasePlan : [];
   if (!plan.length) throw Error("Noch kein Phasenplan gespeichert");
-  const i = plan.findIndex((x) => x.phase === S.state?.phase);
-  const n = plan[i < 0 ? 0 : i + 1]; if (!n) throw Error("Das war bereits die letzte Phase");
-  await setPhase(n.phase, Math.max(0, +n.min || 0), null);
+  const i = Number.isInteger(S.state?.planIdx) ? S.state.planIdx : plan.findIndex((x) => x.phase === S.state?.phase);
+  const ni = i < 0 ? 0 : i + 1, n = plan[ni]; if (!n) throw Error("Das war bereits die letzte Phase");
+  await setPhase(n.phase, Math.max(0, +n.min || 0), null, ni);
 }
 async function resetEvent() {
   if (!isAdmin()) throw Error("Nur Admin");
@@ -760,6 +800,27 @@ function orderCard(o) {
 }const pendingBox = () => { const p = S.users.filter((u) => u.status === "pending"); return isAdmin() && p.length ? `<div class="card warn"><h3>Neue Anmeldungen (${p.length})</h3>${p.map((u) => `<div class="row" style="margin:.3rem 0"><b>${esc(u.gamertag)}</b><button class="sm go" data-act="approve" data-id="${u.id}">Freischalten</button><button class="sm bad" data-act="reject" data-id="${u.id}">Ablehnen</button></div>`).join("")}</div>` : ""; };
 const newsList = (items, del = false) => items.map((n, i) => `<div class="news-item" style="--i:${i + 2}"><span class="nic">${NI[n.type] || "📣"}</span><div><div>${esc(n.text)}</div><small>${ago(n.createdAt)}${n.by ? " · " + esc(n.by) : ""}</small></div>${del && isStaff() ? `<button class="sm" data-act="newsDel" data-id="${n.id}" aria-label="Löschen">✕</button>` : "<span></span>"}</div>`).join("");
 
+async function approveClaim(id) {
+  if (!isStaff()) throw Error("Keine Berechtigung");
+  await runTransaction(db, async (t) => {
+    const cref = doc(db, "task_claims", id), cs = await t.get(cref); if (!cs.exists()) throw Error("Meldung nicht gefunden");
+    const c = cs.data(); if (c.status !== "pending") throw Error("Wurde schon bearbeitet");
+    const ts = await t.get(doc(db, "tasks", c.taskId)), us = await t.get(U(c.uid));
+    if (!us.exists() || us.data().status !== "active") throw Error("Spielerkonto nicht verfügbar");
+    const reward = Math.max(0, Math.floor(+(ts.exists() ? ts.data().reward : c.reward) || 0)), bal = +us.data().balance || 0;
+    t.update(U(c.uid), { balance: bal + reward }); addTx(t, c.uid, reward, "Aufgabe: " + c.taskTitle, "task", bal + reward);
+    t.update(cref, { status: "approved", paid: reward, doneBy: S.me.gamertag, doneAt: serverTimestamp() });
+    newsTx(t, "info", `${c.gamertag} hat die Aufgabe „${c.taskTitle}“ erledigt (+${fmt(reward)} Coins)`);
+  });
+  toast("Bestätigt – Coins ausgezahlt", "ok");
+}
+function taskAdmin() {
+  const pend = S.claims.filter((c) => c.status === "pending"), list = S.tasks.slice().sort(byTime).reverse();
+  return `<div class="cols"><form class="card" data-form="taskCreate"><h3>Neue Aufgabe</h3><label for="tt">Titel</label><input id="tt" name="title" maxlength="80" required><label for="ttx">Beschreibung / Prüfung</label><textarea id="ttx" name="text" maxlength="400" placeholder="Was muss gemacht werden?"></textarea>
+    <div class="cols"><div><label for="tr">Belohnung (Coins)</label><input id="tr" name="reward" type="number" min="0" value="50" required></div><div><label for="tas">Für</label><select id="tas" name="assignee"><option value="all">Alle Spieler</option>${active().filter((u) => u.role === "player").map((u) => `<option value="${u.id}">${esc(u.gamertag)}</option>`).join("")}</select></div></div><p><button class="go">Aufgabe erstellen</button></p></form>
+    <div class="card"><h3>Zu prüfen (${pend.length})</h3>${pend.length ? pend.map((c) => `<div class="order"><div class="oh"><b>${esc(c.taskTitle)}</b><span class="lbl">${esc(c.gamertag)} · ${date(c.createdAt)}</span></div><div class="lbl">Belohnung: <b class="gold">${fmt(c.reward)} 🪙</b></div><div class="row"><button class="go sm" data-act="claimOk" data-id="${c.id}">✓ Bestätigen</button><button class="bad sm" data-act="claimNo" data-id="${c.id}">✕ Ablehnen</button></div></div>`).join("") : '<p class="empty">Nichts zu prüfen.</p>'}</div></div>
+    <div class="card"><h3>Aufgaben (${list.length})</h3>${list.length ? list.map((t) => `<div class="row between pad nowrap"><span style="min-width:0"><b>${esc(t.title)}</b><br><small class="lbl">${fmt(t.reward)} 🪙 · ${t.assignee === "all" ? "alle Spieler" : esc(uname(t.assignee))} · ${S.claims.filter((c) => c.taskId === t.id && c.status === "approved").length}× bestätigt</small></span><button class="sm bad" data-act="taskDel" data-id="${t.id}">✕</button></div>`).join("") : '<p class="empty">Noch keine Aufgaben.</p>'}</div>`;
+}
 function shopFiltered() {
   const raw = S.shopQ.trim().toLowerCase(), us = raw.replace(/\s+/g, "_"), ci = (c) => { const k = CAT_ORDER.indexOf(c); return k < 0 ? 99 : k; };
   return S.shop.filter((i) => i.active && !String(i.id).startsWith("std_") && (S.shopCat === "Alle" || (i.category || "Sonstiges") === S.shopCat) && (!raw || String(i.name).toLowerCase().includes(raw) || String(i.id).includes(us) || String(i.minecraftId || "").includes(us)))
@@ -808,10 +869,10 @@ const V = {
   /* ---------- Home ---------- */
   home() {
     const u = S.me, hr = new Date().getHours(), greet = hr < 5 ? "Gute Nacht" : hr < 11 ? "Guten Morgen" : hr < 18 ? "Guten Tag" : "Guten Abend";
-    const openN = isStaff() ? S.orders.filter((o) => o.status === "open").length + S.support.filter((t) => t.status === "open").length : 0;
-    const apps = [["wallet", "💳", "Konto"], ["shop", "🧱", "Shop"], ["sell", "💰", "Verkaufen"], ["news", "📰", "News"], ["support", "🛟", "Support"], ["bounty", "🎯", "Kopfgeld"], ["vote", "🗳️", "Abstimmung"], ["punish", "⚖️", "Strafen"]];
+    const openN = isStaff() ? S.orders.filter((o) => o.status === "open").length + S.support.filter((t) => t.status === "open").length + S.claims.filter((c) => c.status === "pending").length : 0;
+    const apps = [["wallet", "💳", "Konto"], ["shop", "🧱", "Shop"], ["sell", "💰", "Verkaufen"], ["news", "📰", "News"], ["support", "🛟", "Support"], ["bounty", "🎯", "Kopfgeld"], ["vote", "🗳️", "Abstimmung"], ["tasks", "📝", "Aufgaben"], ["punish", "⚖️", "Strafen"]];
     if (isStaff()) apps.push(["admin", "🛡️", "Admin"]); apps.push(["settings", "⚙️", "Einstellungen"]);
-    return `<section class="hello"><small>${greet}</small><h1>${esc(u.gamertag)}</h1><div class="chips-row"><span class="chipx">🪙 <b data-count="${u.balance || 0}">${fmt(u.balance)}</b></span><span class="chipx">⚔️ ${fmt(u.kills)} Kills</span><span class="chipx">☠ ${fmt(u.deaths)} Tode</span>${S.state?.phase === "end" && u.role === "player" ? `<span class="chipx">${"❤️".repeat(Math.max(0,Math.min(3,u.lives ?? 0)))}${"🖤".repeat(Math.max(0,3-Math.max(0,Math.min(3,u.lives ?? 0))))}</span>` : ""}${S.state ? `<span class="chipx gold">⚡ ${esc(S.state.label)}</span>` : ""}</div></section>
+    return `<section class="hello"><div id="pclock" class="pclock"></div><small>${greet}</small><h1>${esc(u.gamertag)}</h1><div class="chips-row"><span class="chipx">🪙 <b data-count="${u.balance || 0}">${fmt(u.balance)}</b></span><span class="chipx">⚔️ ${fmt(u.kills)} Kills</span><span class="chipx">☠ ${fmt(u.deaths)} Tode</span>${S.state?.phase === "end" && u.role === "player" ? `<span class="chipx">${"❤️".repeat(Math.max(0,Math.min(3,u.lives ?? 0)))}${"🖤".repeat(Math.max(0,3-Math.max(0,Math.min(3,u.lives ?? 0))))}</span>` : ""}${S.state ? `<span class="chipx gold">⚡ ${esc(S.state.label)}</span>` : ""}</div></section>
     <div class="homegrid"><div class="tiles">${apps.map(([v, ic, n], i) => `<button class="tile" style="--i:${i + 2}" data-act="nav" data-v="${v}"><span class="ic">${ic}</span><span>${n}</span>${v === "admin" && openN ? `<span class="badge">${openN}</span>` : ""}</button>`).join("")}</div>
     <div class="card newscard"><div class="row between"><h3><span class="live"></span>Newsboard</h3><button class="sm" data-act="nav" data-v="news">Alle</button></div>${S.news.length ? newsList(S.news.slice(0, 5)) : '<p class="empty">Noch keine News.</p>'}</div></div>`;
   },
@@ -871,7 +932,7 @@ const V = {
   vote() {
     const v = S.vote; if (!v?.open) return `<div class="card"><h3>Minigame-Abstimmung</h3><p class="empty">Gerade läuft keine Abstimmung.</p></div>`;
     const cur = S.ballots.filter((b) => b.round === v.round), total = cur.length, mine = cur.find((b) => b.id === S.uid)?.option;
-    return `<div class="card"><h3>Welches Minigame als Nächstes?</h3>${Object.entries(v.options).map(([id, l]) => { const n = cur.filter((b) => b.option === id).length, p = total ? Math.round((n / total) * 100) : 0;
+    return `<div class="card"><h3>${esc(v.title || "Welches Minigame als Nächstes?")}</h3>${Object.entries(v.options).map(([id, l]) => { const n = cur.filter((b) => b.option === id).length, p = total ? Math.round((n / total) * 100) : 0;
       return `<div class="row between"><span>${esc(l)}${mine === id ? ' <span class="tag g">deine Stimme</span>' : ""}</span><b>${p} %</b></div><div class="bar"><i style="width:${p}%"></i></div><button class="sm" data-act="vote" data-id="${esc(id)}">Dafür stimmen</button><p></p>`; }).join("")}<p class="lbl">${total} Stimmen</p></div>`;
   },
   support() {
@@ -885,6 +946,14 @@ const V = {
     return `<div class="cols"><div class="card"><h3>Mein Konto</h3><p><b>${esc(S.me.gamertag)}</b><br><span class="lbl">Rolle: ${esc(S.me.role)} · Kontostand: ${fmt(S.me.balance)} Coins</span></p><button data-act="logout">Abmelden</button></div>
       ${isAdmin() ? `<form class="card" data-form="cfg"><h3>Realm-Einstellungen</h3>${cfgFields()}<p><button class="go">Speichern</button></p></form>` : ""}</div>`;
   },
+  tasks() {
+    if (outOfGame()) return '<div class="card"><h3>☠ Du bist ausgeschieden</h3></div>';
+    const list = S.tasks.filter((t) => t.active !== false && (t.assignee === "all" || t.assignee === S.uid)).sort(byTime).reverse();
+    return `<div class="pagehead"><p>Erledige Aufgaben, melde sie und kassiere Coins, sobald ein Admin sie bestätigt.</p></div>` + (list.length ? `<div class="cols">${list.map((t) => {
+      const c = S.myClaims.find((x) => x.taskId === t.id), st = !c ? "" : c.status === "approved" ? '<span class="tag g">✓ erledigt</span>' : c.status === "pending" ? '<span class="tag y">wird geprüft …</span>' : '<span class="tag r">✕ abgelehnt</span>';
+      return `<div class="card"><div class="row between"><h3 style="margin:0">${esc(t.title)}</h3><b class="price">+${fmt(t.reward)} 🪙</b></div><p class="lbl">${esc(t.text || "")}</p><div class="row between"><span class="tag">${t.assignee === "all" ? "Für alle" : "Nur für dich"}</span>${st}</div>${!c || c.status === "rejected" ? `<button class="go wide" data-act="taskClaim" data-id="${t.id}">✓ Als erledigt melden</button>` : ""}</div>`;
+    }).join("")}</div>` : '<div class="card empty">Gerade keine Aufgaben.</div>');
+  },
   punish() {
     const L = { warn: ["Verwarnung", "y"], jail: ["Knast", "r"], ban: ["Bann", "r"] };
     const rows = [...S.pun].sort(byTime).reverse();
@@ -897,7 +966,7 @@ const V = {
   },
   quick() {
     const open = S.orders.filter((o) => o.status === "open").sort(byTime), sup = S.support.filter((t) => t.status !== "done").sort(byTime);
-    return `<div class="card compact"><div class="row between"><span><b>⚡ Regiepult</b><br><small class="lbl">${S.state ? esc(S.state.label) : "Noch nicht gestartet"}</small></span><span class="row"><button class="go sm" data-act="nextPhase">Nächste Phase →</button><button class="sm" data-act="voteQuick">🗳️ Abstimmung</button></span></div></div><div class="qgrid"><section><h3>Support-Eingang (${sup.length})</h3>${sup.map((t) => `<div class="order"><div class="oh"><b>🛟 ${esc(t.gamertag)} · ${esc(t.reason)}</b><span class="tag ${t.status === "claimed" ? "y" : "r"}">${t.status === "claimed" ? "übernommen" : "OFFEN"}</span></div><p>${esc(t.text || "")}</p><div class="row">${t.status === "open" ? `<button class="sm go" data-act="supportClaim" data-id="${t.id}">Übernehmen</button>` : ""}<button class="sm" data-act="supportDone" data-id="${t.id}">Erledigt</button></div></div>`).join("") || '<div class="card empty">Keine offenen Support-Rufe.</div>'}<h3>Offene Aufträge (${open.length})</h3>${open.map(orderCard).join("") || '<div class="card empty">Keine offenen Aufträge.</div>'}</section>
+    return `<div class="card compact"><div class="row between"><span><b>⚡ Regiepult</b><br><small class="lbl">${S.state ? esc(S.state.label) : "Noch nicht gestartet"}</small></span><span class="row"><button class="go sm" data-act="nextPhase">Nächste Phase →</button><button class="sm" data-act="voteQuick">🗳️ Abstimmung</button><button class="sm" data-act="extend" data-m="5">⏱ +5 Min</button></span></div></div><div class="qgrid"><section><h3>Support-Eingang (${sup.length})</h3>${sup.map((t) => `<div class="order"><div class="oh"><b>🛟 ${esc(t.gamertag)} · ${esc(t.reason)}</b><span class="tag ${t.status === "claimed" ? "y" : "r"}">${t.status === "claimed" ? "übernommen" : "OFFEN"}</span></div><p>${esc(t.text || "")}</p><div class="row">${t.status === "open" ? `<button class="sm go" data-act="supportClaim" data-id="${t.id}">Übernehmen</button>` : ""}<button class="sm" data-act="supportDone" data-id="${t.id}">Erledigt</button></div></div>`).join("") || '<div class="card empty">Keine offenen Support-Rufe.</div>'}<h3>Offene Aufträge (${open.length})</h3>${open.map(orderCard).join("") || '<div class="card empty">Keine offenen Aufträge.</div>'}</section>
       <aside>${pendingBox()}
         <form class="card compact" data-form="death"><h3>☠ Tod melden</h3>
           <div class="drow"><select name="victim" aria-label="Gestorben" required><option value="" disabled ${S.victim ? "" : "selected"}>Gestorben …</option>${userOpts(S.victim)}</select><span>→</span><select name="killer" aria-label="Getötet von"><option value="">Getötet von … (Umwelt)</option>${userOpts()}</select></div>
@@ -905,10 +974,10 @@ const V = {
         <div class="card compact"><h3>Spieler (${active().length})</h3><input id="pq" placeholder="Suchen …" value="${esc(S.q)}" style="margin-bottom:.4rem"><div id="plist">${playerList()}</div></div></aside></div>`;
   },
   full() {
-    const FT = isAdmin() ? [["players", "👥 Spieler & Teams"], ["event", "🎉 Event"], ["shop", "🛍 Shop"], ["news", "📰 News"], ["reports", "🚩 Meldungen"], ["history", "📜 Verlauf"], ["settings", "⚙ Einstellungen"]] : [["event", "🎉 Event"], ["news", "📰 News"], ["reports", "🚩 Meldungen"], ["history", "📜 Verlauf"]];
+    const FT = isAdmin() ? [["players", "👥 Spieler & Teams"], ["event", "🎉 Event"], ["shop", "🛍 Shop"], ["news", "📰 News"], ["tasks", "📝 Aufgaben"], ["reports", "🚩 Meldungen"], ["history", "📜 Verlauf"], ["settings", "⚙ Einstellungen"]] : [["event", "🎉 Event"], ["news", "📰 News"], ["tasks", "📝 Aufgaben"], ["reports", "🚩 Meldungen"], ["history", "📜 Verlauf"]];
     if (!FT.some((t) => t[0] === S.fullTab)) S.fullTab = FT[0][0];
     const F = (t) => S.fullTab === t, pend = S.users.filter((u) => u.status === "pending").length;
-    const tabs = `<div class="tabs">${FT.map(([k, l]) => `<button class="${F(k) ? "on" : ""}" data-act="fullTab" data-t="${k}">${l}${k === "players" && pend ? `<span class="badge">${pend}</span>` : ""}</button>`).join("")}</div>`;
+    const tabs = `<div class="tabs">${FT.map(([k, l]) => `<button class="${F(k) ? "on" : ""}" data-act="fullTab" data-t="${k}">${l}${k === "tasks" && S.claims.filter((c) => c.status === "pending").length ? `<span class="badge">${S.claims.filter((c) => c.status === "pending").length}</span>` : ""}${k === "players" && pend ? `<span class="badge">${pend}</span>` : ""}</button>`).join("")}</div>`;
     const done = S.orders.filter((o) => o.status !== "open").slice(0, 25);
     const adminOnly = isAdmin() ? `
       ${F("players") ? `<div class="card"><h3>Spieler verwalten</h3><div class="scroll"><table><thead><tr><th>Spieler</th><th>Rolle</th><th>Coins</th><th>Team</th></tr></thead><tbody>${active().map((u) => `<tr><td>${esc(u.gamertag)}</td>
@@ -920,6 +989,8 @@ const V = {
       ${F("players") ? `<form class="card" data-form="team"><h3>Team anlegen</h3><label for="tn">Name</label><input id="tn" name="name" required><label for="ta">Spieler A</label><select id="ta" name="a">${userOpts()}</select><label for="tb">Spieler B</label><select id="tb" name="b">${userOpts()}</select><p><button class="go">Erstellen</button></p></form>` : ""}
       ${F("event") ? `<form class="card" data-form="phasePlan"><h3>Event-Setup · Phasenplan</h3><p class="lbl">Eine Zeile je Phase: phase,minuten. Erlaubt: protection, minigame, pvp, end</p><textarea name="plan" rows="6">${esc((C().phasePlan || [{phase:"protection",min:0},{phase:"minigame",min:0},{phase:"pvp",min:0},{phase:"minigame",min:0},{phase:"end",min:0}]).map(x => x.phase + "," + (+x.min || 0)).join("\n"))}</textarea><label>Minigames für automatische Abstimmung (Komma)</label><input name="minigames" value="${esc(C().minigames || "Spleef, Parkour, Bingo")}"><p><button class="go">Event-Setup speichern</button></p></form>
       <div class="card"><h3>Phase ${S.state ? "· " + esc(S.state.label) : ""}</h3><p class="row"><button class="go" data-act="nextPhase">Nächste Phase →</button>${Object.entries(PH).map(([k,v]) => `<button class="sm" data-act="phaseNow" data-p="${k}">${v.label}</button>`).join("")}</p></div>` : ""}
+      ${F("event") ? `<form class="card" data-form="extend"><h3>⏱ Phase verlängern</h3><p class="lbl hint">Die Minuten werden auf den laufenden Timer gerechnet (negativ = verkürzen). Im Newsboard erscheint eine Nachricht.</p><div class="row nowrap"><input name="min" type="number" value="4" aria-label="Minuten"><button class="go">Verlängern</button></div><div class="row" style="margin-top:.5rem">${[1, 2, 5, 10].map((n) => `<button type="button" class="sm" data-act="extend" data-m="${n}">+${n} Min</button>`).join("")}</div></form>
+      <form class="card" data-form="extendVote"><h3>🗳️ Verlängerungs-Abstimmung</h3><p class="lbl hint">Spieler stimmen ab, ob die Phase länger dauern soll. Beim Beenden der Abstimmung wird bei „Ja“-Mehrheit automatisch verlängert.</p><div class="row nowrap"><input name="min" type="number" min="1" value="4" aria-label="Minuten"><button class="go">Starten</button></div></form>` : ""}
       ${F("event") ? `<form class="card" data-form="voteStart"><h3>Abstimmung</h3><label for="vo">Optionen (Komma)</label><input id="vo" name="opts" placeholder="Spleef, Parkour, Bingo" required><p class="row"><button class="go">Starten</button><button type="button" data-act="voteClose">Beenden</button></p></form>` : ""}
       ${F("shop") ? `<form class="card" data-form="shopItem"><h3>Neuer Shop-Artikel</h3><label for="sn">Name</label><input id="sn" name="name" required><div class="cols"><div><label for="sp">Preis (pro Pack)</label><input id="sp" name="price" type="number" min="1" required></div><div><label for="spk">Packgröße</label><input id="spk" name="packSize" type="number" min="1" value="1"></div></div>
         <label for="sc">Kategorie</label><input id="sc" name="category"><label for="sk">Lagerbestand in Stück (leer = unbegrenzt)</label><input id="sk" name="stock" type="number" min="0">
@@ -933,7 +1004,7 @@ const V = {
   <input id="admQ" placeholder="Artikel suchen …" value="${esc(S.admQ)}" style="margin-bottom:.5rem"><div id="admList">${admShopList()}</div>
 </div></div>` : ""}
       ${F("settings") ? `<form class="card" data-form="cfg"><h3>Einstellungen</h3>${cfgFields()}<p><button class="go">Speichern</button></p></form><div class="card warn"><h3>Event zurücksetzen</h3><p class="lbl">Behält Realm-Einstellungen und den gespeicherten Phasenplan. Löscht Event-Fortschritt und Teams.</p><button type="button" class="bad" data-act="resetEvent">Alles zurücksetzen</button></div>` : ""}</div>` : "";
-    return `${tabs}${F("players") ? pendingBox() : ""}${adminOnly}<div class="cols">
+    return `${tabs}${F("players") ? pendingBox() : ""}${adminOnly}${F("tasks") ? taskAdmin() : ""}<div class="cols">
       ${F("news") ? `<form class="card" data-form="newsPost"><h3>News veröffentlichen</h3><label for="nt">Text</label><input id="nt" name="text" maxlength="200" placeholder="z. B. Heute Abend um 20 Uhr Minigame!" required><p><button class="go">Posten</button></p></form>` : ""}
       ${F("news") ? `<div class="card"><h3>Letzte News</h3>${S.news.length ? newsList(S.news.slice(0, 20), true) : '<p class="empty">Noch keine News.</p>'}</div>` : ""}
       ${F("event") ? `<form class="card" data-form="broadcast"><h3>Broadcast</h3><label for="bt1">Titel</label><input id="bt1" name="title" maxlength="60" required><label for="bt2">Untertitel</label><input id="bt2" name="sub" maxlength="80">
@@ -969,7 +1040,7 @@ function render(force) {
   if (!V[S.view] || (S.view === "admin" && !isStaff())) S.view = "home";
   const dock = [["home", "⌂", "Home"], ["wallet", "💳", "Konto"], ["shop", "🧱", "Shop"], ["sell", "💰", "Verkaufen"], ["news", "📰", "News"], ["support", "🛟", "Support"], ...(isStaff() ? [["admin", "🛡️", "Admin"]] : []), ["settings", "⚙️", "Einstellungen"]];
   const inApp = S.view !== "home", cart = S.view === "shop" && S.shopPage === "cart";
-  const title = cart ? "Warenkorb" : { wallet: "Konto", shop: "Shop", sell: "Verkaufen", news: "Newsboard", support: "Support", bounty: "Kopfgeld", vote: "Abstimmung", punish: "Strafen", settings: "Einstellungen", admin: "Admin" }[S.view] || "App";
+  const title = cart ? "Warenkorb" : { wallet: "Konto", shop: "Shop", sell: "Verkaufen", news: "Newsboard", support: "Support", bounty: "Kopfgeld", vote: "Abstimmung", punish: "Strafen", tasks: "Aufgaben", settings: "Einstellungen", admin: "Admin" }[S.view] || "App";
   const key = [S.view, S.shopPage, S.adminMode, S.fullTab, S.walTab, S.sellCat, S.sellItem, S.sellQty].join("|"), enter = key !== lastKey, sy = window.scrollY; lastKey = key;
   $("#root").innerHTML = `<div class="shell ${enter ? "enter" : ""}"><header class="statusbar"><button class="osbrand" data-act="nav" data-v="home"><img src="${GRASS}" alt="">RealmOS</button><span id="timer" class="timer"></span><div class="who"><span class="online-dot"></span>${esc(S.me.gamertag)}</div></header>
     ${inApp ? `<div class="apphead"><button class="back" data-act="${cart ? "shopBack" : "nav"}" data-v="home" aria-label="Zurück">‹</button><h2>${title}</h2></div>` : ""}
@@ -985,12 +1056,20 @@ function loginView() {
     <p><button class="go">${reg ? "Konto erstellen" : "Anmelden"}</button></p><p class="neg">${esc(S.authMsg)}</p>${reg ? '<p class="lbl">Nach der Registrierung schaltet ein Admin dein Konto frei.</p>' : ""}</form>`;
 }
 document.addEventListener("focusout", () => { if (dirty) setTimeout(() => render(), 80); });
+const clock = (sec) => { const h = Math.floor(sec / 3600), m = Math.floor((sec % 3600) / 60), x = sec % 60, p = (n) => String(n).padStart(2, "0"); return (h ? h + ":" : "") + p(m) + ":" + p(x); };
 function tick() {
-  const el = $("#timer"), s = S.state; if (!el) return;
-  if (!s) { el.textContent = ""; return; }
-  const left = s.endsAt?.toMillis ? Math.max(0, Math.round((s.endsAt.toMillis() - Date.now()) / 1000)) : null;
-  el.innerHTML = `<small>${esc(s.label ?? "")}</small>${left === null ? "" : String(Math.floor(left / 60)).padStart(2, "0") + ":" + String(left % 60).padStart(2, "0")}`;
-  if (isAdmin() && left === 0 && s.next && PH[s.next] && !tick.busy) { tick.busy = true; setPhase(s.next, 0, null).finally(() => (tick.busy = false)); }
+  const s = S.state, el = $("#timer"), pc = $("#pclock");
+  const ms = s?.endsAt?.toMillis ? s.endsAt.toMillis() : null, left = ms === null ? null : Math.max(0, Math.round((ms - Date.now()) / 1000));
+  if (el) el.innerHTML = !s ? "" : `<small>${esc(s.label ?? "")}</small>${left === null ? "" : clock(left)}`;
+  if (pc) {
+    if (!s || !s.phase) pc.innerHTML = "";
+    else {
+      const dur = s.durMs ? s.durMs / 1000 : 0, pct = left !== null && dur ? Math.min(100, Math.round((left / dur) * 100)) : 0;
+      pc.className = "pclock" + (left !== null && left > 0 && left <= 30 ? " low" : "");
+      pc.innerHTML = `<small>⚡ ${esc(s.label)}</small>` + (left === null ? `<b>∞</b><em>Kein Zeitlimit</em>` : `<b>${clock(left)}</b>${dur ? `<div class="bar"><i style="width:${pct}%"></i></div>` : ""}<em>${left === 0 ? "Zeit abgelaufen" : s.nextLabel ? "Danach: " + esc(s.nextLabel) : "bis zum Ende der Phase"}</em>`);
+    }
+  }
+  if (isAdmin() && ms !== null && left === 0 && !tick.busy) { tick.busy = true; autoAdvance(ms).catch((e) => console.warn(e)).finally(() => (tick.busy = false)); }
 }
 setInterval(tick, 1000);
 
@@ -1057,7 +1136,15 @@ const ACT = {
   exportShop: () => exportShopCSV(),
   sellSubmit: () => submitSale(),
   newsDel: (b) => deleteDoc(doc(db, "news", b.dataset.id)),
-  voteClose: () => updateDoc(doc(db, "events", "vote"), { open: false }),
+  voteClose: async () => {
+    const v = S.vote; await updateDoc(doc(db, "events", "vote"), { open: false });
+    if (v?.extend) { const cur = S.ballots.filter((b) => b.round === v.round), y = cur.filter((b) => b.option === "ja").length, n = cur.filter((b) => b.option === "nein").length; if (y > n) await extendPhase(v.extend); else await newsAdd("info", `Abstimmung beendet: Phase wird nicht verlängert (Ja ${y} · Nein ${n})`); }
+  },
+  extend: (b) => extendPhase(+b.dataset.m),
+  taskClaim: async (b) => { const t = S.tasks.find((x) => x.id === b.dataset.id); if (!t) return; if (outOfGame()) throw Error("Du bist ausgeschieden"); await setDoc(doc(db, "task_claims", t.id + "_" + S.uid), { taskId: t.id, taskTitle: t.title, reward: +t.reward || 0, uid: S.uid, gamertag: S.me.gamertag, status: "pending", createdAt: serverTimestamp() }); toast("Aufgabe gemeldet – ein Admin prüft sie", "ok"); },
+  claimOk: async (b) => { b.disabled = true; try { await approveClaim(b.dataset.id); } catch (e) { b.disabled = false; throw e; } },
+  claimNo: (b) => updateDoc(doc(db, "task_claims", b.dataset.id), { status: "rejected", doneBy: S.me.gamertag, doneAt: serverTimestamp() }).then(() => toast("Abgelehnt", "ok")),
+  taskDel: (b) => confirm("Aufgabe löschen?") && deleteDoc(doc(db, "tasks", b.dataset.id)),
   nextPhase: () => nextPlannedPhase(),
   phaseNow: (b) => setPhase(b.dataset.p, 0, null),
   voteQuick: () => openMinigameVote().then(() => toast("Abstimmung gestartet", "ok")),
@@ -1099,6 +1186,30 @@ const FORM = {
     if (f.delivery.value === "chest") xyz(f.coords.value);
     const ref = await addDoc(collection(db, "requests"), { type: "cart", payload: { items, delivery: f.delivery.value, coords: f.coords.value.trim() }, uid: S.uid, status: "pending", createdAt: serverTimestamp() });
     trackOrder(ref, "Bestellung", "shop", () => { S.cart = {}; });
+  },
+  death: (f) => { S.victim = ""; return req("kill", { victim: f.victim.value, killer: f.killer.value || null, addBounty: !!(f.killer.value && f.bo.checked), bountyAmount: Math.max(0, Math.floor(+f.ba.value || +C().bountyOnKill || 0)) }); },
+  broadcast: (f) => order("Broadcast", [...(f.sub.value.trim() ? [`/title @a subtitle ${clean(f.sub.value)}`] : []), `/title @a title ${clean(f.title.value)}`]),
+  clear: (f) => order(`Item entfernen: ${uname(f.uid.value)}`, [`/clear ${q(uname(f.uid.value))} ${f.item.value.trim()}`]),
+  coins: async (f) => { await adjust(f.uid.value, Math.floor(+f.amount.value), clean(f.reason.value)); toast("Gebucht", "ok"); },
+  phase: (f) => setPhase(f.phase.value, Math.max(0, +f.min.value || 0), f.next.value),
+  async voteStart(f) { const options = Object.fromEntries(f.opts.value.split(",").map((s) => s.trim()).filter(Boolean).map((l) => [slug(l), l])); await setDoc(doc(db, "events", "vote"), { open: true, round: (S.vote?.round ?? 0) + 1, options }); newsAdd("info", `Abstimmung gestartet: ${Object.values(options).join(" · ")}`).catch(() => {}); toast("Abstimmung gestartet", "ok"); },
+  async team(f) {
+    if (f.a.value === f.b.value) throw Error("Zwei verschiedene Spieler wählen");
+    const ref = await addDoc(collection(db, "teams"), { name: f.name.value.trim(), members: [f.a.value, f.b.value], vault: 0 });
+    await updateDoc(U(f.a.value), { teamId: ref.id }); await updateDoc(U(f.b.value), { teamId: ref.id }); toast("Team erstellt", "ok");
+  },
+  extend: (f) => extendPhase(+f.min.value),
+  async extendVote(f) {
+    const min = Math.floor(+f.min.value); if (!(min > 0)) throw Error("Minuten größer als 0 angeben");
+    await setDoc(doc(db, "events", "vote"), { open: true, round: (S.vote?.round ?? 0) + 1, title: `Phase um ${min} Min verlängern?`, extend: min, options: { ja: `Ja, +${min} Min`, nein: "Nein" } });
+    newsAdd("info", `Abstimmung: Phase um ${min} Min verlängern? Jetzt im Menü „Abstimmung“ abstimmen!`).catch(() => {}); toast("Abstimmung gestartet", "ok");
+  },
+  async taskCreate(f) {
+    if (!isStaff()) throw Error("Keine Berechtigung");
+    const title = clean(f.title.value); if (!title) throw Error("Titel fehlt");
+    const reward = Math.max(0, Math.floor(+f.reward.value || 0)), as = f.assignee.value;
+    await addDoc(collection(db, "tasks"), { title, text: String(f.text.value).replace(/[\r\n]+/g, " ").trim().slice(0, 400), reward, assignee: as, active: true, by: S.me.gamertag, createdAt: serverTimestamp() });
+    newsAdd("info", `Neue Aufgabe: ${title} (+${fmt(reward)} Coins)${as === "all" ? "" : " für " + uname(as)}`).catch(() => {}); toast("Aufgabe erstellt", "ok");
   },
   async shopItem(f) { await setDoc(doc(db, "shop_items", slug(f.name.value)), { name: f.name.value.trim(), price: +f.price.value, category: f.category.value.trim() || "Sonstiges", stock: f.stock.value === "" ? null : Math.max(0, Math.floor(+f.stock.value)), packSize: Math.max(1, Math.floor(+(f.packSize?.value || 1))), minecraftId: (f.minecraftId?.value || "").trim(), icon: (f.icon?.value || "🧱").trim(), commands: f.commands.value.split("\n").map((s) => s.trim()).filter(Boolean), active: true }); toast("Artikel gespeichert", "ok"); },
   async cfg(f) { await setDoc(doc(db, "settings", "config"), { ...S.cfg, jail: xyz(f.jail.value), spawn: xyz(f.spawn.value), minigame: xyz(f.minigame.value), startCoins: +f.startCoins.value, killReward: +f.killReward.value, bountyOnKill: +f.bountyOnKill.value }); toast("Gespeichert", "ok"); },
